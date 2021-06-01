@@ -71,7 +71,7 @@ pub struct TupleTypeSignature {
 pub struct BufferLength(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StringUTF8Length(u32);
+pub struct StringUTF8Length(pub u32);
 
 // INVARIANTS enforced by the Type Signatures.
 //   1. A TypeSignature constructor will always fail rather than construct a

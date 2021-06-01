@@ -391,3 +391,65 @@ pub fn check_special_index_of(
 
     TypeSignature::new_option(TypeSignature::UIntType).map_err(|e| e.into())
 }
+
+pub fn check_special_slice(
+    checker: &mut TypeChecker,
+    args: &[SymbolicExpression],
+    context: &TypingContext,
+) -> TypeResult {
+    check_argument_count(3, args)?;
+
+    // Position
+    let position = match args[1].expr {
+        SymbolicExpressionType::LiteralValue(Value::UInt(position)) => position,
+        _ => {
+            let position_type = checker.type_check(&args[1], context)?;
+            return Err(CheckErrors::TypeError(TypeSignature::UIntType, position_type).into());
+        }
+    };
+    checker
+        .type_map
+        .set_type(&args[1], TypeSignature::UIntType)?;
+
+    let position = u32::try_from(position).map_err(|_e| CheckErrors::MaxLengthOverflow)?;
+
+    // Length
+    let length = match args[2].expr {
+        SymbolicExpressionType::LiteralValue(Value::UInt(expected_len)) => expected_len,
+        _ => {
+            let expected_len_type = checker.type_check(&args[2], context)?;
+            return Err(CheckErrors::TypeError(TypeSignature::UIntType, expected_len_type).into());
+        }
+    };
+    checker
+        .type_map
+        .set_type(&args[2], TypeSignature::UIntType)?;
+
+    let length = u32::try_from(length).map_err(|_e| CheckErrors::MaxLengthOverflow)?;
+
+    // Sequence
+    let seq_type = checker.type_check(&args[0], context)?;
+
+    let (origin_len, resized_seq) = match &seq_type {
+        TypeSignature::SequenceType(ListType(list)) => {
+            (list.get_max_len(), TypeSignature::list_of(list.get_list_item_type().clone(), length)?)
+        },
+        TypeSignature::SequenceType(BufferType(len)) => {
+            (len.0, TypeSignature::SequenceType(BufferType(BufferLength(length))))
+        },
+        TypeSignature::SequenceType(StringType(ASCII(len))) => {
+            (len.0, TypeSignature::SequenceType(StringType(ASCII(BufferLength(length)))))
+        },
+        TypeSignature::SequenceType(StringType(UTF8(len))) => {
+            (len.0, TypeSignature::SequenceType(StringType(UTF8(StringUTF8Length(length)))))
+        },
+        _ => return Err(CheckErrors::ExpectedSequence(seq_type.clone()).into()),
+    };
+
+    if (position + length) > origin_len {
+        return Err(CheckErrors::ConstructedListTooLarge.into())
+    } 
+
+    Ok(resized_seq)
+}
+

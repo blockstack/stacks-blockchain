@@ -685,6 +685,7 @@ impl TypedNativeFunction {
             Len => Special(SpecialNativeFunction(&sequences::check_special_len)),
             ElementAt => Special(SpecialNativeFunction(&sequences::check_special_element_at)),
             IndexOf => Special(SpecialNativeFunction(&sequences::check_special_index_of)),
+            Slice => Special(SpecialNativeFunction(&sequences::check_special_slice)),
             ListCons => Special(SpecialNativeFunction(&check_special_list_cons)),
             FetchEntry => Special(SpecialNativeFunction(&maps::check_special_fetch_entry)),
             SetEntry => Special(SpecialNativeFunction(&maps::check_special_set_entry)),

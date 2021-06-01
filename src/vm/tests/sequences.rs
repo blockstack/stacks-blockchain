@@ -449,6 +449,145 @@ fn test_simple_map_append() {
 }
 
 #[test]
+fn test_slice_list() {
+    let tests = [
+        "(slice (list 2 3 4 5 6 7 8) u0 u3)",
+        "(slice (list u0 u1 u2 u3 u4) u3 u2)",
+        // "(append (append (list) 1) 2)",
+    ];
+
+    let expected = [
+        Value::list_from(vec![Value::Int(2), Value::Int(3), Value::Int(4)]).unwrap(),
+        Value::list_from(vec![Value::UInt(3), Value::UInt(4)]).unwrap(),
+        // Value::list_from(vec![Value::Int(1), Value::Int2)]).unwrap(),
+    ];
+
+    for (test, expected) in tests.iter().zip(expected.iter()) {
+        assert_eq!(expected.clone(), execute(test).unwrap().unwrap());
+    }
+
+    // assert_eq!(
+    //     execute("(append (append (list) 1) u2)").unwrap_err(),
+    //     CheckErrors::TypeValueError(IntType, Value::UInt(2)).into()
+    // );
+}
+
+
+// #[test]
+// fn test_slice_list() {
+//     let good = ["(slice (list 2 3 4 5 6 7 8) u0 u3)", "(slice (list u0 u1 u2 u3 u4) u3 u2)"];
+//     let expected = ["(list 3 int)", "(list 2 uint)"];
+
+//     for (good_test, expected) in good.iter().zip(expected.iter()) {
+//         assert_eq!(
+//             expected,
+//             &format!("{}", type_check_helper(&good_test).unwrap())
+//         );
+//     }
+
+//     let bad = [
+//         "(slice (list 2 3) 3 u4)",
+//         "(slice (list 2 3) u3 4)",
+//         "(slice (list u0) u1)",
+//     ];
+
+//     let bad_expected = [
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::IncorrectArgumentCount(3, 2),
+//     ];
+//     for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+//         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+//     }
+// }
+
+// #[test]
+// fn test_slice_buff() {
+//     let good = ["(slice 0x000102030405 u0 u3)", "(slice 0x000102030405 u3 u2)"];
+//     let expected = ["(buff 3)", "(buff 2)"];
+
+//     for (good_test, expected) in good.iter().zip(expected.iter()) {
+//         assert_eq!(
+//             expected,
+//             &format!("{}", type_check_helper(&good_test).unwrap())
+//         );
+//     }
+
+//     let bad = [
+//         "(slice 0x000102030405 3 u4)",
+//         "(slice 0x000102030405 u3 4)",
+//         "(slice 0x000102030405 u1)",
+//     ];
+
+//     let bad_expected = [
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::IncorrectArgumentCount(3, 2),
+//     ];
+//     for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+//         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+//     }
+// }
+
+
+// #[test]
+// fn test_slice_ascii() {
+//     let good = ["(slice \"blockstack\" u4 u5)", "(slice \"blockstack\" u0 u5)"];
+//     let expected = ["(string-ascii 5)", "(string-ascii 5)"];
+
+//     for (good_test, expected) in good.iter().zip(expected.iter()) {
+//         assert_eq!(
+//             expected,
+//             &format!("{}", type_check_helper(&good_test).unwrap())
+//         );
+//     }
+
+//     let bad = [
+//         "(slice \"blockstack\" 3 u4)",
+//         "(slice \"blockstack\" u3 4)",
+//         "(slice \"blockstack\" u1)",
+//     ];
+
+//     let bad_expected = [
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::IncorrectArgumentCount(3, 2),
+//     ];
+//     for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+//         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+//     }
+// }
+
+
+// #[test]
+// fn test_slice_utf8() {
+//     let good = ["(slice u\"blockstack\" u4 u5)", "(slice u\"blockstack\" u4 u5)"];
+//     let expected = ["(string-utf8 5)", "(string-utf8 5)"];
+
+//     for (good_test, expected) in good.iter().zip(expected.iter()) {
+//         assert_eq!(
+//             expected,
+//             &format!("{}", type_check_helper(&good_test).unwrap())
+//         );
+//     }
+
+//     let bad = [
+//         "(slice u\"blockstack\" 3 u4)",
+//         "(slice u\"blockstack\" u3 4)",
+//         "(slice u\"blockstack\" u1)",
+//     ];
+
+//     let bad_expected = [
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::TypeError(UIntType, IntType),
+//         CheckErrors::IncorrectArgumentCount(3, 2),
+//     ];
+//     for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+//         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+//     }
+// }
+
+#[test]
 fn test_simple_list_concat() {
     let tests = [
         "(concat (list 1 2) (list 4 8))",
@@ -684,12 +823,12 @@ fn test_simple_folds_string() {
     let tests =
         ["(define-private (get-len (x (string-ascii 1)) (acc int)) (+ acc 1))
          (fold get-len \"blockstack\" 0)",
-        "(define-private (slice (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
+        "(define-private (slice-v1 (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
             (if (< (get cursor acc) (get limit acc))
                 (let ((data (default-to (get data acc) (as-max-len? (concat (get data acc) x) u10))))
                     (tuple (limit (get limit acc)) (cursor (+ u1 (get cursor acc))) (data data))) 
                 acc))
-        (get data (fold slice \"0123456789\" (tuple (limit u5) (cursor u0) (data \"\"))))"];
+        (get data (fold slice-v1 \"0123456789\" (tuple (limit u5) (cursor u0) (data \"\"))))"];
 
     let expected = [
         Value::Int(10),

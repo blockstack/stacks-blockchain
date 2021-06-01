@@ -311,3 +311,34 @@ pub fn native_element_at(sequence: Value, index: Value) -> Result<Value> {
         Ok(Value::none())
     }
 }
+
+pub fn special_slice(
+    args: &[SymbolicExpression],
+    env: &mut Environment,
+    context: &LocalContext,
+) -> Result<Value> {
+    check_argument_count(3, args)?;
+
+    runtime_cost(
+        ClarityCostFunction::Concat,
+        env,
+        0,
+    )?;
+
+    let seq = eval(&args[0], env, context)?;
+    let position = eval(&args[1], env, context)?;
+    let length = eval(&args[2], env, context)?;
+
+    let sliced_seq = match (seq, position, length) {
+        (Value::Sequence(seq), Value::UInt(position), Value::UInt(length)) => {
+            let (position, length) = match (usize::try_from(position), usize::try_from(length)) {
+                (Ok(position), Ok(length)) => (position, length),
+                _ => return Ok(Value::none())
+            };
+    
+            seq.slice(position, length)
+        },
+        _ => Err(RuntimeErrorType::BadTypeConstruction.into()),
+    }?;
+    Ok(sliced_seq)
+}

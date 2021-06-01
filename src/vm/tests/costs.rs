@@ -137,6 +137,7 @@ pub fn get_simple_test(function: &NativeFunctions) -> &'static str {
         StxTransfer => r#"(stx-transfer? u1 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR 0x89995432)"#,
         StxBurn => "(stx-burn? u1 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR)",
         StxGetAccount => "(stx-account 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR)",
+        Slice => "(slice list-bar u1 u1)",
     }
 }
 

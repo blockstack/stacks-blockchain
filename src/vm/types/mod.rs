@@ -399,24 +399,43 @@ impl SequenceData {
     }
 
     pub fn slice(self, position: usize, length: usize) -> Result<Value> {
-        if position + length > self.len() {
-            return Err(RuntimeErrorType::BadTypeConstruction.into());
-        }
+        let empty_seq = position + length > self.len();
+
         let result = match self {
             SequenceData::Buffer(data) => {
-                Value::buff_from(data.data[position..(length + position)].to_vec())
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::buff_from(data)
             }
             SequenceData::List(data) => {
-                Value::list_from(data.data[position..(length + position)].to_vec())
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::list_from(data)
             }
             SequenceData::String(CharType::ASCII(data)) => {
-                Value::string_ascii_from_bytes(data.data[position..(length + position)].to_vec())
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::string_ascii_from_bytes(data)
             }
-            SequenceData::String(CharType::UTF8(data)) => Ok(Value::Sequence(
-                SequenceData::String(CharType::UTF8(UTF8Data {
-                    data: data.data[position..(length + position)].to_vec(),
-                })),
-            )),
+            SequenceData::String(CharType::UTF8(data)) => {
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Ok(Value::Sequence(SequenceData::String(CharType::UTF8(
+                    UTF8Data { data },
+                ))))
+            }
         }?;
 
         Ok(result)

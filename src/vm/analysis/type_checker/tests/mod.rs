@@ -1068,8 +1068,17 @@ fn test_slice_list() {
     let good = [
         "(slice (list 2 3 4 5 6 7 8) u0 u3)",
         "(slice (list u0 u1 u2 u3 u4) u3 u2)",
+        "(slice (list 2 3 4 5 6 7 8) u0 u0)",
+        "(slice (list 2 3 4 5 6 7 8) u10 u3)",
+        "(slice (list) u0 u3)",
     ];
-    let expected = ["(list 3 int)", "(list 2 uint)"];
+    let expected = [
+        "(list 7 int)",
+        "(list 5 uint)",
+        "(list 7 int)",
+        "(list 7 int)",
+        "(list 0 UnknownType)",
+    ];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
         assert_eq!(
@@ -1100,7 +1109,7 @@ fn test_slice_buff() {
         "(slice 0x000102030405 u0 u3)",
         "(slice 0x000102030405 u3 u2)",
     ];
-    let expected = ["(buff 3)", "(buff 2)"];
+    let expected = ["(buff 6)", "(buff 6)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
         assert_eq!(
@@ -1131,7 +1140,7 @@ fn test_slice_ascii() {
         "(slice \"blockstack\" u4 u5)",
         "(slice \"blockstack\" u0 u5)",
     ];
-    let expected = ["(string-ascii 5)", "(string-ascii 5)"];
+    let expected = ["(string-ascii 10)", "(string-ascii 10)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
         assert_eq!(
@@ -1162,7 +1171,7 @@ fn test_slice_utf8() {
         "(slice u\"blockstack\" u4 u5)",
         "(slice u\"blockstack\" u4 u5)",
     ];
-    let expected = ["(string-utf8 5)", "(string-utf8 5)"];
+    let expected = ["(string-utf8 10)", "(string-utf8 10)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
         assert_eq!(

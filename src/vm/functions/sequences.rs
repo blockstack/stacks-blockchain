@@ -319,11 +319,7 @@ pub fn special_slice(
 ) -> Result<Value> {
     check_argument_count(3, args)?;
 
-    runtime_cost(
-        ClarityCostFunction::Concat,
-        env,
-        0,
-    )?;
+    // TODO: runtime_cost
 
     let seq = eval(&args[0], env, context)?;
     let position = eval(&args[1], env, context)?;
@@ -336,12 +332,9 @@ pub fn special_slice(
                 _ => return Ok(Value::none()),
             };
 
-            match seq.slice(position, length) {
-                Ok(v) => Value::some(v)?,
-                Err(_) => Value::none(),
-            }
+            seq.slice(position, length)
         }
         _ => return Err(RuntimeErrorType::BadTypeConstruction.into()),
-    };
+    }?;
     Ok(sliced_seq)
 }

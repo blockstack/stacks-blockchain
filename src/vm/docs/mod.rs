@@ -590,9 +590,8 @@ const SLICE_API: SpecialAPI = SpecialAPI {
 If `length` is 0 or `position + length` is greater than or equal to `(len sequence)`, this function returns `none`.",
     example: "(slice \"blockstack\" u5 u5) ;; Returns (some \"stack\")
 (slice (list 1 2 3 4 5) u5 u2) ;; Returns none
-(slice (list 1 2 3 4 5) (+ u1 u2) u1) ;; Returns (some (list 4))
+(slice (list 1 2 3 4 5) u3 u1) ;; Returns (some (4))
 (slice \"abcd\" u1 u2) ;; Returns (some \"bc\")
-(slice 0xfb010203 u1 u3) ;; Returns (some 0x010203)
 ",
 };
 
@@ -1902,7 +1901,7 @@ mod test {
 
         let conn = store.as_clarity_db(&DOC_HEADER_DB, &DOC_POX_STATE_DB);
         let mut contract_context =
-            ContractContext::new(contract_id.clone(), crate::vm::ClarityVersion::Clarity1);
+            ContractContext::new(contract_id.clone(), crate::vm::ClarityVersion::Clarity2);
         let mut global_context = GlobalContext::new(false, conn, LimitedCostTracker::new_free());
 
         global_context

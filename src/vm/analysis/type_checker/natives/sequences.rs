@@ -431,25 +431,28 @@ pub fn check_special_slice(
     let seq_type = checker.type_check(&args[0], context)?;
 
     let (origin_len, resized_seq) = match &seq_type {
-        TypeSignature::SequenceType(ListType(list)) => {
-            (list.get_max_len(), TypeSignature::list_of(list.get_list_item_type().clone(), length)?)
-        },
-        TypeSignature::SequenceType(BufferType(len)) => {
-            (len.0, TypeSignature::SequenceType(BufferType(BufferLength(length))))
-        },
-        TypeSignature::SequenceType(StringType(ASCII(len))) => {
-            (len.0, TypeSignature::SequenceType(StringType(ASCII(BufferLength(length)))))
-        },
-        TypeSignature::SequenceType(StringType(UTF8(len))) => {
-            (len.0, TypeSignature::SequenceType(StringType(UTF8(StringUTF8Length(length)))))
-        },
+        TypeSignature::SequenceType(ListType(list)) => (
+            list.get_max_len(),
+            TypeSignature::list_of(list.get_list_item_type().clone(), length)?,
+        ),
+        TypeSignature::SequenceType(BufferType(len)) => (
+            len.0,
+            TypeSignature::SequenceType(BufferType(BufferLength(length))),
+        ),
+        TypeSignature::SequenceType(StringType(ASCII(len))) => (
+            len.0,
+            TypeSignature::SequenceType(StringType(ASCII(BufferLength(length)))),
+        ),
+        TypeSignature::SequenceType(StringType(UTF8(len))) => (
+            len.0,
+            TypeSignature::SequenceType(StringType(UTF8(StringUTF8Length(length)))),
+        ),
         _ => return Err(CheckErrors::ExpectedSequence(seq_type.clone()).into()),
     };
 
     if (position + length) > origin_len {
-        return Err(CheckErrors::ConstructedListTooLarge.into())
-    } 
+        return TypeSignature::new_option(TypeSignature::NoType).map_err(|e| e.into());
+    }
 
     Ok(resized_seq)
 }
-

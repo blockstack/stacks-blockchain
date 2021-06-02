@@ -1065,7 +1065,10 @@ fn test_native_append() {
 
 #[test]
 fn test_slice_list() {
-    let good = ["(slice (list 2 3 4 5 6 7 8) u0 u3)", "(slice (list u0 u1 u2 u3 u4) u3 u2)"];
+    let good = [
+        "(slice (list 2 3 4 5 6 7 8) u0 u3)",
+        "(slice (list u0 u1 u2 u3 u4) u3 u2)",
+    ];
     let expected = ["(list 3 int)", "(list 2 uint)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
@@ -1093,7 +1096,10 @@ fn test_slice_list() {
 
 #[test]
 fn test_slice_buff() {
-    let good = ["(slice 0x000102030405 u0 u3)", "(slice 0x000102030405 u3 u2)"];
+    let good = [
+        "(slice 0x000102030405 u0 u3)",
+        "(slice 0x000102030405 u3 u2)",
+    ];
     let expected = ["(buff 3)", "(buff 2)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
@@ -1119,10 +1125,12 @@ fn test_slice_buff() {
     }
 }
 
-
 #[test]
 fn test_slice_ascii() {
-    let good = ["(slice \"blockstack\" u4 u5)", "(slice \"blockstack\" u0 u5)"];
+    let good = [
+        "(slice \"blockstack\" u4 u5)",
+        "(slice \"blockstack\" u0 u5)",
+    ];
     let expected = ["(string-ascii 5)", "(string-ascii 5)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {
@@ -1148,10 +1156,12 @@ fn test_slice_ascii() {
     }
 }
 
-
 #[test]
 fn test_slice_utf8() {
-    let good = ["(slice u\"blockstack\" u4 u5)", "(slice u\"blockstack\" u4 u5)"];
+    let good = [
+        "(slice u\"blockstack\" u4 u5)",
+        "(slice u\"blockstack\" u4 u5)",
+    ];
     let expected = ["(string-utf8 5)", "(string-utf8 5)"];
 
     for (good_test, expected) in good.iter().zip(expected.iter()) {

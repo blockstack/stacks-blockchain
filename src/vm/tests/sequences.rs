@@ -457,8 +457,9 @@ fn test_slice_list() {
     ];
 
     let expected = [
-        Value::list_from(vec![Value::Int(2), Value::Int(3), Value::Int(4)]).unwrap(),
-        Value::list_from(vec![Value::UInt(3), Value::UInt(4)]).unwrap(),
+        Value::some(Value::list_from(vec![Value::Int(2), Value::Int(3), Value::Int(4)]).unwrap())
+            .unwrap(),
+        Value::some(Value::list_from(vec![Value::UInt(3), Value::UInt(4)]).unwrap()).unwrap(),
         // Value::list_from(vec![Value::Int(1), Value::Int2)]).unwrap(),
     ];
 
@@ -471,7 +472,6 @@ fn test_slice_list() {
     //     CheckErrors::TypeValueError(IntType, Value::UInt(2)).into()
     // );
 }
-
 
 // #[test]
 // fn test_slice_list() {
@@ -529,7 +529,6 @@ fn test_slice_list() {
 //     }
 // }
 
-
 // #[test]
 // fn test_slice_ascii() {
 //     let good = ["(slice \"blockstack\" u4 u5)", "(slice \"blockstack\" u0 u5)"];
@@ -557,7 +556,6 @@ fn test_slice_list() {
 //         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
 //     }
 // }
-
 
 // #[test]
 // fn test_slice_utf8() {

@@ -399,20 +399,24 @@ impl SequenceData {
     }
 
     pub fn slice(self, position: usize, length: usize) -> Result<Value> {
-        if position + length > self.len()  {
+        if position + length > self.len() {
             return Err(RuntimeErrorType::BadTypeConstruction.into());
         }
         let result = match self {
-            SequenceData::Buffer(data) => Value::buff_from(data.data[position..(length + position)].to_vec()),
-            SequenceData::List(data) => Value::list_from(data.data[position..(length + position)].to_vec()),
+            SequenceData::Buffer(data) => {
+                Value::buff_from(data.data[position..(length + position)].to_vec())
+            }
+            SequenceData::List(data) => {
+                Value::list_from(data.data[position..(length + position)].to_vec())
+            }
             SequenceData::String(CharType::ASCII(data)) => {
                 Value::string_ascii_from_bytes(data.data[position..(length + position)].to_vec())
             }
-            SequenceData::String(CharType::UTF8(data)) => {
-                Ok(Value::Sequence(SequenceData::String(CharType::UTF8(UTF8Data {
+            SequenceData::String(CharType::UTF8(data)) => Ok(Value::Sequence(
+                SequenceData::String(CharType::UTF8(UTF8Data {
                     data: data.data[position..(length + position)].to_vec(),
-                }))))
-            }
+                })),
+            )),
         }?;
 
         Ok(result)

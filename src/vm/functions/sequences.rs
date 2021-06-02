@@ -333,12 +333,15 @@ pub fn special_slice(
         (Value::Sequence(seq), Value::UInt(position), Value::UInt(length)) => {
             let (position, length) = match (usize::try_from(position), usize::try_from(length)) {
                 (Ok(position), Ok(length)) => (position, length),
-                _ => return Ok(Value::none())
+                _ => return Ok(Value::none()),
             };
-    
-            seq.slice(position, length)
-        },
-        _ => Err(RuntimeErrorType::BadTypeConstruction.into()),
-    }?;
+
+            match seq.slice(position, length) {
+                Ok(v) => Value::some(v)?,
+                Err(_) => Value::none(),
+            }
+        }
+        _ => return Err(RuntimeErrorType::BadTypeConstruction.into()),
+    };
     Ok(sliced_seq)
 }

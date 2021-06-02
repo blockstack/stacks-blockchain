@@ -449,6 +449,96 @@ fn test_simple_map_append() {
 }
 
 #[test]
+fn test_slice_list() {
+    let tests = [
+        "(slice (list 2 3 4 5 6 7 8) u0 u3)",
+        "(slice (list u0 u1 u2 u3 u4) u3 u2)",
+        "(slice (list 2 3 4 5 6 7 8) u0 u0)",
+        "(slice (list 2 3 4 5 6 7 8) u10 u3)",
+    ];
+
+    let expected = [
+        Value::list_from(vec![Value::Int(2), Value::Int(3), Value::Int(4)]).unwrap(),
+        Value::list_from(vec![Value::UInt(3), Value::UInt(4)]).unwrap(),
+        Value::list_from(vec![]).unwrap(),
+        Value::list_from(vec![]).unwrap(),
+    ];
+
+    for (test, expected) in tests.iter().zip(expected.iter()) {
+        assert_eq!(expected.clone(), execute(test).unwrap().unwrap());
+    }
+}
+
+#[test]
+fn test_slice_buff() {
+    let tests = [
+        "(slice 0x000102030405 u0 u3)",
+        "(slice 0x000102030405 u3 u3)",
+        "(slice 0x000102030405 u3 u10)",
+        "(slice 0x000102030405 u10 u3)",
+        "(slice 0x u2 u3)",
+    ];
+
+    let expected = [
+        Value::buff_from(vec![0, 1, 2]).unwrap(),
+        Value::buff_from(vec![3, 4, 5]).unwrap(),
+        Value::buff_from(vec![]).unwrap(),
+        Value::buff_from(vec![]).unwrap(),
+        Value::buff_from(vec![]).unwrap(),
+    ];
+
+    for (test, expected) in tests.iter().zip(expected.iter()) {
+        assert_eq!(expected.clone(), execute(test).unwrap().unwrap());
+    }
+}
+
+#[test]
+fn test_slice_ascii() {
+    let tests = [
+        "(slice \"blockstack\" u0 u5)",
+        "(slice \"blockstack\" u5 u5)",
+        "(slice \"blockstack\" u5 u0)",
+        "(slice \"blockstack\" u11 u3)",
+        "(slice \"\" u0 u3)",
+    ];
+
+    let expected = [
+        Value::string_ascii_from_bytes("block".into()).unwrap(),
+        Value::string_ascii_from_bytes("stack".into()).unwrap(),
+        Value::string_ascii_from_bytes(vec![]).unwrap(),
+        Value::string_ascii_from_bytes(vec![]).unwrap(),
+        Value::string_ascii_from_bytes(vec![]).unwrap(),
+    ];
+
+    for (test, expected) in tests.iter().zip(expected.iter()) {
+        assert_eq!(expected.clone(), execute(test).unwrap().unwrap());
+    }
+}
+
+#[test]
+fn test_slice_utf8() {
+    let tests = [
+        "(slice u\"hello \\u{1F98A}\" u0 u5)",
+        "(slice u\"hello \\u{1F98A}\" u6 u1)",
+        "(slice u\"hello \\u{1F98A}\" u6 u0)",
+        "(slice u\"hello \\u{1F98A}\" u11 u4)",
+        "(slice u\"\" u0 u3)",
+    ];
+
+    let expected = [
+        Value::string_utf8_from_bytes("hello".into()).unwrap(),
+        Value::string_utf8_from_bytes("🦊".into()).unwrap(),
+        Value::string_utf8_from_bytes(vec![]).unwrap(),
+        Value::string_utf8_from_bytes(vec![]).unwrap(),
+        Value::string_utf8_from_bytes(vec![]).unwrap(),
+    ];
+
+    for (test, expected) in tests.iter().zip(expected.iter()) {
+        assert_eq!(expected.clone(), execute(test).unwrap().unwrap());
+    }
+}
+
+#[test]
 fn test_simple_list_concat() {
     let tests = [
         "(concat (list 1 2) (list 4 8))",
@@ -684,12 +774,12 @@ fn test_simple_folds_string() {
     let tests =
         ["(define-private (get-len (x (string-ascii 1)) (acc int)) (+ acc 1))
          (fold get-len \"blockstack\" 0)",
-        "(define-private (slice (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
+        "(define-private (slice-v1 (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
             (if (< (get cursor acc) (get limit acc))
                 (let ((data (default-to (get data acc) (as-max-len? (concat (get data acc) x) u10))))
                     (tuple (limit (get limit acc)) (cursor (+ u1 (get cursor acc))) (data data))) 
                 acc))
-        (get data (fold slice \"0123456789\" (tuple (limit u5) (cursor u0) (data \"\"))))"];
+        (get data (fold slice-v1 \"0123456789\" (tuple (limit u5) (cursor u0) (data \"\"))))"];
 
     let expected = [
         Value::Int(10),

@@ -62,6 +62,7 @@ pub fn test_tracked_costs(prog: &str) -> ExecutionCost {
         (define-constant tuple-foo (tuple (a 1)))
         (define-constant list-foo (list true))
         (define-constant list-bar (list 1))
+        (define-constant str-foo \"foobar\")
         (use-trait trait-1 .contract-trait.trait-1)
         (define-public (execute (contract <trait-1>)) (ok {}))",
         prog

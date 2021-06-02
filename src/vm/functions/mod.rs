@@ -135,6 +135,7 @@ define_versioned_named_enum!(NativeFunctions(ClarityVersion) {
     StxTransfer("stx-transfer?", ClarityVersion::Clarity1),
     StxBurn("stx-burn?", ClarityVersion::Clarity1),
     StxGetAccount("stx-account", ClarityVersion::Clarity2),
+    Slice("slice", ClarityVersion::Clarity2),
 });
 
 impl NativeFunctions {
@@ -286,6 +287,7 @@ pub fn lookup_reserved_functions(name: &str, version: &ClarityVersion) -> Option
                 NativeHandle::DoubleArg(&sequences::native_index_of),
                 ClarityCostFunction::IndexOf,
             ),
+            Slice => SpecialFunction("special_slice", &sequences::special_slice),
             ListCons => SpecialFunction("special_list_cons", &sequences::list_cons),
             FetchEntry => SpecialFunction("special_map-get?", &database::special_fetch_entry),
             SetEntry => SpecialFunction("special_set-entry", &database::special_set_entry),

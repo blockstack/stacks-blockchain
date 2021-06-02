@@ -397,6 +397,49 @@ impl SequenceData {
         }?;
         Ok(())
     }
+
+    pub fn slice(self, position: usize, length: usize) -> Result<Value> {
+        let empty_seq = position + length > self.len();
+
+        let result = match self {
+            SequenceData::Buffer(data) => {
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::buff_from(data)
+            }
+            SequenceData::List(data) => {
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::list_from(data)
+            }
+            SequenceData::String(CharType::ASCII(data)) => {
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Value::string_ascii_from_bytes(data)
+            }
+            SequenceData::String(CharType::UTF8(data)) => {
+                let data = if empty_seq {
+                    vec![]
+                } else {
+                    data.data[position..(length + position)].to_vec()
+                };
+                Ok(Value::Sequence(SequenceData::String(CharType::UTF8(
+                    UTF8Data { data },
+                ))))
+            }
+        }?;
+
+        Ok(result)
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]

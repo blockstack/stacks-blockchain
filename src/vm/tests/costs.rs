@@ -137,6 +137,7 @@ pub fn get_simple_test(function: &NativeFunctions) -> &'static str {
         StxTransfer => r#"(stx-transfer? u1 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR 0x89995432)"#,
         StxBurn => "(stx-burn? u1 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR)",
         StxGetAccount => "(stx-account 'SZ2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKQ9H6DPR)",
+        Slice => "(slice str-foo u1 u1)",
     }
 }
 
@@ -166,6 +167,7 @@ fn test_tracked_costs(prog: &str) -> ExecutionCost {
         (define-constant tuple-foo (tuple (a 1)))
         (define-constant list-foo (list true))
         (define-constant list-bar (list 1))
+        (define-constant str-foo \"foobar\")
         (use-trait trait-1 .contract-trait.trait-1)
         (define-public (execute (contract <trait-1>)) (ok {}))",
         prog

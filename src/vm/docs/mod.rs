@@ -581,6 +581,20 @@ function returns `none`.",
 ",
 };
 
+const SLICE_API: SpecialAPI = SpecialAPI {
+    input_type: "buff|list A|string, uint, uint",
+    output_type: "(optional buff|list A|string)",
+    signature: "(slice sequence position length)",
+    description:
+        "The `slice` function returns a sub-sequence of size `length` in the provided sequence.
+If `length` is 0 or `position + length` is greater than or equal to `(len sequence)`, this function returns `none`.",
+    example: "(slice \"blockstack\" u5 u5) ;; Returns \"stack\"
+(slice (list 1 2 3 4 5) u5 u2) ;; Returns ()
+(slice (list 1 2 3 4 5) u3 u1) ;; Returns (4)
+(slice \"abcd\" u1 u2) ;; Returns \"bc\"
+",
+};
+
 const LIST_API: SpecialAPI = SpecialAPI {
     input_type: "A, ...",
     output_type: "(list A)",
@@ -1610,6 +1624,7 @@ fn make_api_reference(function: &NativeFunctions) -> FunctionAPI {
         Len => make_for_special(&LEN_API, name),
         ElementAt => make_for_special(&ELEMENT_AT_API, name),
         IndexOf => make_for_special(&INDEX_OF_API, name),
+        Slice => make_for_special(&SLICE_API, name),
         ListCons => make_for_special(&LIST_API, name),
         FetchEntry => make_for_special(&FETCH_ENTRY_API, name),
         SetEntry => make_for_special(&SET_ENTRY_API, name),
@@ -1886,7 +1901,7 @@ mod test {
 
         let conn = store.as_clarity_db(&DOC_HEADER_DB, &DOC_POX_STATE_DB);
         let mut contract_context =
-            ContractContext::new(contract_id.clone(), crate::vm::ClarityVersion::Clarity1);
+            ContractContext::new(contract_id.clone(), crate::vm::ClarityVersion::Clarity2);
         let mut global_context = GlobalContext::new(false, conn, LimitedCostTracker::new_free());
 
         global_context

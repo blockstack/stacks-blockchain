@@ -359,7 +359,7 @@ fn eval_all(
  */
 pub fn execute(program: &str) -> Result<Option<Value>> {
     let contract_id = QualifiedContractIdentifier::transient();
-    let mut contract_context = ContractContext::new(contract_id.clone(), ClarityVersion::Clarity1);
+    let mut contract_context = ContractContext::new(contract_id.clone(), ClarityVersion::Clarity2);
     let mut marf = MemoryBackingStore::new();
     let conn = marf.as_clarity_db();
     let mut global_context = GlobalContext::new(false, conn, LimitedCostTracker::new_free());

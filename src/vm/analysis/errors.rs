@@ -325,7 +325,7 @@ impl DiagnosableError for CheckErrors {
             CheckErrors::NoSuperType(a, b) => format!("unable to create a supertype for the two types: '{}' and '{}'", a, b),
             CheckErrors::UnknownListConstructionFailure => format!("invalid syntax for list definition"),
             CheckErrors::ListTypesMustMatch => format!("expecting elements of same type in a list"),
-            CheckErrors::ConstructedListTooLarge => format!("reached limit of elements in a list"),
+            CheckErrors::ConstructedListTooLarge => format!("reached limit of elements in a sequence"),
             CheckErrors::TypeError(expected_type, found_type) => format!("expecting expression of type '{}', found '{}'", expected_type, found_type),
             CheckErrors::TypeLiteralError(expected_type, found_type) => format!("expecting a literal of type '{}', found '{}'", expected_type, found_type),
             CheckErrors::TypeValueError(expected_type, found_value) => format!("expecting expression of type '{}', found '{}'", expected_type, found_value),

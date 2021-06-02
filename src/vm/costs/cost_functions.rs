@@ -103,6 +103,7 @@ define_named_enum!(ClarityCostFunction {
     Append("cost_append"),
     Concat("cost_concat"),
     AsMaxLen("cost_as_max_len"),
+    Slice("cost_slice"),
     ContractCall("cost_contract_call"),
     ContractOf("cost_contract_of"),
     PrincipalOf("cost_principal_of"),

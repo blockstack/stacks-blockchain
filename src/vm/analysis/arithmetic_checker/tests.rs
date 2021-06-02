@@ -39,7 +39,7 @@ fn arithmetic_check(contract: &str) -> Result<(), Error> {
         contract_identifier,
         expressions,
         LimitedCostTracker::new_free(),
-        ClarityVersion::Clarity1,
+        ClarityVersion::Clarity2,
     );
 
     ArithmeticOnlyChecker::run(&analysis)
@@ -206,6 +206,9 @@ fn test_functions() {
          FunctionNotPermitted(NativeFunctions::Sha512)),
         ("(define-private (foo) (sha512/256 0))",
          FunctionNotPermitted(NativeFunctions::Sha512Trunc256)),
+        ("(define-private (foo (a (list 3 uint)))
+         (slice a u2 u1))",
+         FunctionNotPermitted(NativeFunctions::Slice)),
 
     ];
 

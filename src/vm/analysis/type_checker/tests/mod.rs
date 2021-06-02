@@ -974,12 +974,12 @@ fn test_buff_fold() {
     let good = [
         "(define-private (get-len (x (buff 1)) (acc uint)) (+ acc u1))
         (fold get-len 0x000102030405 u0)",
-        "(define-private (slice (x (buff 1)) (acc (tuple (limit uint) (cursor uint) (data (buff 10)))))
+        "(define-private (slice-v1 (x (buff 1)) (acc (tuple (limit uint) (cursor uint) (data (buff 10)))))
             (if (< (get cursor acc) (get limit acc))
                 (let ((data (default-to (get data acc) (as-max-len? (concat (get data acc) x) u10))))
                     (tuple (limit (get limit acc)) (cursor (+ u1 (get cursor acc))) (data data)))
                 acc))
-        (fold slice 0x00010203040506070809 (tuple (limit u5) (cursor u0) (data 0x)))"];
+        (fold slice-v1 0x00010203040506070809 (tuple (limit u5) (cursor u0) (data 0x)))"];
     let expected = [
         "uint",
         "(tuple (cursor uint) (data (buff 10)) (limit uint))",
@@ -1057,6 +1057,139 @@ fn test_native_append() {
         CheckErrors::TypeError(IntType, UIntType),
         CheckErrors::TypeError(UIntType, IntType),
         CheckErrors::IncorrectArgumentCount(2, 1),
+    ];
+    for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+        assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+    }
+}
+
+#[test]
+fn test_slice_list() {
+    let good = [
+        "(slice (list 2 3 4 5 6 7 8) u0 u3)",
+        "(slice (list u0 u1 u2 u3 u4) u3 u2)",
+        "(slice (list 2 3 4 5 6 7 8) u0 u0)",
+        "(slice (list 2 3 4 5 6 7 8) u10 u3)",
+        "(slice (list) u0 u3)",
+    ];
+    let expected = [
+        "(list 7 int)",
+        "(list 5 uint)",
+        "(list 7 int)",
+        "(list 7 int)",
+        "(list 0 UnknownType)",
+    ];
+
+    for (good_test, expected) in good.iter().zip(expected.iter()) {
+        assert_eq!(
+            expected,
+            &format!("{}", type_check_helper(&good_test).unwrap())
+        );
+    }
+
+    let bad = [
+        "(slice (list 2 3) 3 u4)",
+        "(slice (list 2 3) u3 4)",
+        "(slice (list u0) u1)",
+    ];
+
+    let bad_expected = [
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::IncorrectArgumentCount(3, 2),
+    ];
+    for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+        assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+    }
+}
+
+#[test]
+fn test_slice_buff() {
+    let good = [
+        "(slice 0x000102030405 u0 u3)",
+        "(slice 0x000102030405 u3 u2)",
+    ];
+    let expected = ["(buff 6)", "(buff 6)"];
+
+    for (good_test, expected) in good.iter().zip(expected.iter()) {
+        assert_eq!(
+            expected,
+            &format!("{}", type_check_helper(&good_test).unwrap())
+        );
+    }
+
+    let bad = [
+        "(slice 0x000102030405 3 u4)",
+        "(slice 0x000102030405 u3 4)",
+        "(slice 0x000102030405 u1)",
+    ];
+
+    let bad_expected = [
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::IncorrectArgumentCount(3, 2),
+    ];
+    for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+        assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+    }
+}
+
+#[test]
+fn test_slice_ascii() {
+    let good = [
+        "(slice \"blockstack\" u4 u5)",
+        "(slice \"blockstack\" u0 u5)",
+    ];
+    let expected = ["(string-ascii 10)", "(string-ascii 10)"];
+
+    for (good_test, expected) in good.iter().zip(expected.iter()) {
+        assert_eq!(
+            expected,
+            &format!("{}", type_check_helper(&good_test).unwrap())
+        );
+    }
+
+    let bad = [
+        "(slice \"blockstack\" 3 u4)",
+        "(slice \"blockstack\" u3 4)",
+        "(slice \"blockstack\" u1)",
+    ];
+
+    let bad_expected = [
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::IncorrectArgumentCount(3, 2),
+    ];
+    for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
+        assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
+    }
+}
+
+#[test]
+fn test_slice_utf8() {
+    let good = [
+        "(slice u\"blockstack\" u4 u5)",
+        "(slice u\"blockstack\" u4 u5)",
+    ];
+    let expected = ["(string-utf8 10)", "(string-utf8 10)"];
+
+    for (good_test, expected) in good.iter().zip(expected.iter()) {
+        assert_eq!(
+            expected,
+            &format!("{}", type_check_helper(&good_test).unwrap())
+        );
+    }
+
+    let bad = [
+        "(slice u\"blockstack\" 3 u4)",
+        "(slice u\"blockstack\" u3 4)",
+        "(slice u\"blockstack\" u1)",
+    ];
+
+    let bad_expected = [
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::TypeError(UIntType, IntType),
+        CheckErrors::IncorrectArgumentCount(3, 2),
     ];
     for (bad_test, expected) in bad.iter().zip(bad_expected.iter()) {
         assert_eq!(expected, &type_check_helper(&bad_test).unwrap_err().err);
@@ -2140,12 +2273,12 @@ fn test_string_ascii_fold() {
     let good = [
         "(define-private (get-len (x (string-ascii 1)) (acc uint)) (+ acc u1))
         (fold get-len \"blockstack\" u0)",
-        "(define-private (slice (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
+        "(define-private (slice-v1 (x (string-ascii 1)) (acc (tuple (limit uint) (cursor uint) (data (string-ascii 10)))))
             (if (< (get cursor acc) (get limit acc))
                 (let ((data (default-to (get data acc) (as-max-len? (concat (get data acc) x) u10))))
                     (tuple (limit (get limit acc)) (cursor (+ u1 (get cursor acc))) (data data)))
                 acc))
-        (fold slice \"blockstack\" (tuple (limit u5) (cursor u0) (data \"\")))"];
+        (fold slice-v1 \"blockstack\" (tuple (limit u5) (cursor u0) (data \"\")))"];
     let expected = [
         "uint",
         "(tuple (cursor uint) (data (string-ascii 10)) (limit uint))",
@@ -2193,12 +2326,12 @@ fn test_string_utf8_fold() {
     let good = [
         "(define-private (get-len (x (string-utf8 1)) (acc uint)) (+ acc u1))
         (fold get-len u\"blockstack\" u0)",
-        "(define-private (slice (x (string-utf8 1)) (acc (tuple (limit uint) (cursor uint) (data (string-utf8 11)))))
+        "(define-private (slice-v1 (x (string-utf8 1)) (acc (tuple (limit uint) (cursor uint) (data (string-utf8 11)))))
             (if (< (get cursor acc) (get limit acc))
                 (let ((data (default-to (get data acc) (as-max-len? (concat (get data acc) x) u11))))
                     (tuple (limit (get limit acc)) (cursor (+ u1 (get cursor acc))) (data data)))
                 acc))
-        (fold slice u\"blockstack\\u{1F926}\" (tuple (limit u5) (cursor u0) (data u\"\")))"];
+        (fold slice-v1 u\"blockstack\\u{1F926}\" (tuple (limit u5) (cursor u0) (data u\"\")))"];
     let expected = [
         "uint",
         "(tuple (cursor uint) (data (string-utf8 11)) (limit uint))",

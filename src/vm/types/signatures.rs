@@ -68,7 +68,7 @@ pub struct TupleTypeSignature {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BufferLength(pub u32);
+pub struct BufferLength(u32);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StringUTF8Length(u32);
@@ -125,12 +125,29 @@ use self::TypeSignature::{
     TraitReferenceType, TupleType, UIntType,
 };
 
-pub const BUFF_64: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(64)));
-pub const BUFF_65: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(65)));
-pub const BUFF_32: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(32)));
-pub const BUFF_33: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(33)));
-pub const BUFF_20: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(20)));
-pub const BUFF_1: TypeSignature = SequenceType(SequenceSubtype::BufferType(BufferLength(1)));
+lazy_static! {
+    pub static ref BUFF_64: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(64u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_65: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(65u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_32: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(32u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_33: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(33u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_20: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(20u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_1: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(1u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+    pub static ref BUFF_16: TypeSignature = SequenceType(SequenceSubtype::BufferType(
+        BufferLength::try_from(16u32).expect("BUG: Legal Clarity buffer length marked invalid")
+    ));
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListTypeData {
@@ -638,10 +655,10 @@ impl TypeSignature {
     }
 
     pub fn max_buffer() -> TypeSignature {
-        SequenceType(SequenceSubtype::BufferType(BufferLength(
-            u32::try_from(MAX_VALUE_SIZE)
+        SequenceType(SequenceSubtype::BufferType(
+            BufferLength::try_from(MAX_VALUE_SIZE)
                 .expect("FAIL: Max Clarity Value Size is no longer realizable in Buffer Type"),
-        )))
+        ))
     }
 
     /// If one of the types is a NoType, return Ok(the other type), otherwise return least_supertype(a, b)

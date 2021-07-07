@@ -217,7 +217,7 @@ impl EventObserver {
         }
     }
 
-    /// Returns json payload to send for new block event
+    /// Returns json payload to send for new block or microblock event
     fn make_new_block_txs_payload(
         receipt: &StacksTransactionReceipt,
         tx_index: u32,
@@ -232,26 +232,9 @@ impl EventObserver {
             "raw_tx": format!("0x{}", &receipt_payload_info.raw_tx),
             "contract_abi": receipt_payload_info.contract_interface_json,
             "execution_cost": receipt.execution_cost,
-        })
-    }
-
-    /// Returns json payload to send for new microblock event
-    fn make_new_microblock_txs_payload(
-        receipt: &StacksTransactionReceipt,
-        tx_index: u32,
-        sequence: u16,
-    ) -> serde_json::Value {
-        let receipt_payload_info = EventObserver::generate_payload_info_for_receipt(receipt);
-
-        json!({
-            "txid": format!("0x{}", &receipt_payload_info.txid),
-            "tx_index": tx_index,
-            "status": receipt_payload_info.success,
-            "raw_result": format!("0x{}", &receipt_payload_info.raw_result),
-            "raw_tx": format!("0x{}", &receipt_payload_info.raw_tx),
-            "contract_abi": receipt_payload_info.contract_interface_json,
-            "execution_cost": receipt.execution_cost,
-            "sequence": sequence,
+            "microblock_sequence": receipt.microblock_header.as_ref().map(|x| x.sequence),
+            "microblock_hash": receipt.microblock_header.as_ref().map(|x| format!("0x{}", x.block_hash())),
+            "microblock_parent_hash": receipt.microblock_header.as_ref().map(|x| format!("0x{}", x.prev_block)),
         })
     }
 
@@ -284,6 +267,9 @@ impl EventObserver {
         parent_index_block_hash: StacksBlockId,
         filtered_events: Vec<(usize, &(bool, Txid, &StacksTransactionEvent))>,
         serialized_txs: &Vec<serde_json::Value>,
+        burn_block_hash: BurnchainHeaderHash,
+        burn_block_height: u32,
+        burn_block_timestamp: u64,
     ) {
         // Serialize events to JSON
         let serialized_events: Vec<serde_json::Value> = filtered_events
@@ -297,6 +283,9 @@ impl EventObserver {
             "parent_index_block_hash": format!("0x{}", parent_index_block_hash),
             "events": serialized_events,
             "transactions": serialized_txs,
+            "burn_block_hash": format!("0x{}", burn_block_hash),
+            "burn_block_height": burn_block_height,
+            "burn_block_timestamp": burn_block_timestamp,
         });
 
         self.send_payload(&payload, PATH_MICROBLOCK_SUBMIT);
@@ -318,6 +307,9 @@ impl EventObserver {
         boot_receipts: &Vec<StacksTransactionReceipt>,
         winner_txid: &Txid,
         mature_rewards: &serde_json::Value,
+        parent_burn_block_hash: BurnchainHeaderHash,
+        parent_burn_block_height: u32,
+        parent_burn_block_timestamp: u64,
     ) {
         // Serialize events to JSON
         let serialized_events: Vec<serde_json::Value> = filtered_events
@@ -348,9 +340,13 @@ impl EventObserver {
             "parent_block_hash": format!("0x{}", chain_tip.block.header.parent_block),
             "parent_index_block_hash": format!("0x{}", parent_index_hash),
             "parent_microblock": format!("0x{}", chain_tip.block.header.parent_microblock),
+            "parent_microblock_sequence": chain_tip.block.header.parent_microblock_sequence,
             "matured_miner_rewards": mature_rewards.clone(),
             "events": serialized_events,
             "transactions": serialized_txs,
+            "parent_burn_block_hash":  format!("0x{}", parent_burn_block_hash),
+            "parent_burn_block_height": parent_burn_block_height,
+            "parent_burn_block_timestamp": parent_burn_block_timestamp,
         });
 
         // Send payload
@@ -389,6 +385,9 @@ impl BlockEventDispatcher for EventDispatcher {
         winner_txid: Txid,
         mature_rewards: Vec<MinerReward>,
         mature_rewards_info: Option<MinerRewardInfo>,
+        parent_burn_block_hash: BurnchainHeaderHash,
+        parent_burn_block_height: u32,
+        parent_burn_block_timestamp: u64,
     ) {
         let chain_tip = ChainTip {
             metadata,
@@ -401,6 +400,9 @@ impl BlockEventDispatcher for EventDispatcher {
             winner_txid,
             mature_rewards,
             mature_rewards_info,
+            parent_burn_block_hash,
+            parent_burn_block_height,
+            parent_burn_block_timestamp,
         )
     }
 
@@ -582,6 +584,9 @@ impl EventDispatcher {
         winner_txid: Txid,
         mature_rewards: Vec<MinerReward>,
         mature_rewards_info: Option<MinerRewardInfo>,
+        parent_burn_block_hash: BurnchainHeaderHash,
+        parent_burn_block_height: u32,
+        parent_burn_block_timestamp: u64,
     ) {
         let boot_receipts = if chain_tip.metadata.block_height == 1 {
             let mut boot_receipts_result = self
@@ -641,6 +646,9 @@ impl EventDispatcher {
                     &boot_receipts,
                     &winner_txid,
                     &mature_rewards,
+                    parent_burn_block_hash,
+                    parent_burn_block_height,
+                    parent_burn_block_timestamp,
                 );
             }
         }
@@ -670,7 +678,7 @@ impl EventDispatcher {
         let flattened_receipts = processed_unconfirmed_state
             .receipts
             .iter()
-            .flat_map(|(_, r)| r.clone())
+            .flat_map(|(_, _, r)| r.clone())
             .collect();
         let (dispatch_matrix, events) =
             self.create_dispatch_matrix_and_event_vector(&flattened_receipts);
@@ -679,14 +687,10 @@ impl EventDispatcher {
         let mut tx_index;
         let mut serialized_txs = Vec::new();
 
-        for (curr_sequence_number, receipts) in processed_unconfirmed_state.receipts.iter() {
+        for (_, _, receipts) in processed_unconfirmed_state.receipts.iter() {
             tx_index = 0;
             for receipt in receipts.iter() {
-                let payload = EventObserver::make_new_microblock_txs_payload(
-                    receipt,
-                    tx_index,
-                    *curr_sequence_number,
-                );
+                let payload = EventObserver::make_new_block_txs_payload(receipt, tx_index);
                 serialized_txs.push(payload);
                 tx_index += 1;
             }
@@ -703,6 +707,9 @@ impl EventDispatcher {
                 parent_index_block_hash,
                 filtered_events,
                 &serialized_txs,
+                processed_unconfirmed_state.burn_block_hash,
+                processed_unconfirmed_state.burn_block_height,
+                processed_unconfirmed_state.burn_block_timestamp,
             );
         }
     }

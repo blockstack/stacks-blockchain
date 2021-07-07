@@ -162,6 +162,9 @@ pub struct StacksEpochReceipt {
     pub matured_rewards_info: Option<MinerRewardInfo>,
     pub parent_microblocks_cost: ExecutionCost,
     pub anchored_block_cost: ExecutionCost,
+    pub parent_burn_block_hash: BurnchainHeaderHash,
+    pub parent_burn_block_height: u32,
+    pub parent_burn_block_timestamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2156,7 +2159,7 @@ pub mod test {
         // Just update the expected value
         assert_eq!(
             genesis_root_hash.to_string(),
-            "3102b7d9c7fdddc49910ea49a3ed4e322b772b9e5ee9505d9fb3f566affd1c54"
+            "c771616ff6acb710051238c9f4a3c48020a6d70cda637d34b89f2311a7e27886"
         );
     }
 

@@ -845,6 +845,13 @@ impl PeerDB {
         Ok(allow_rows)
     }
 
+    /// Get the bootstrap peers
+    pub fn get_bootstrap_peers(conn: &DBConn, network_id: u32) -> Result<Vec<Neighbor>, db_error> {
+        let sql = "SELECT * FROM frontier WHERE initial = 1 AND network_id = ?1 ORDER BY RANDOM()";
+        let allow_rows = query_rows::<Neighbor, _>(conn, sql, &[&network_id])?;
+        Ok(allow_rows)
+    }
+
     /// Insert or replace a neighbor into a given slot
     pub fn insert_or_replace_peer<'a>(
         tx: &mut Transaction<'a>,

@@ -14,9 +14,8 @@ use stacks::chainstate::coordinator::comm::{CoordinatorChannels, CoordinatorRece
 use stacks::chainstate::coordinator::{
     BlockEventDispatcher, ChainsCoordinator, CoordinatorCommunication,
 };
-use stacks::chainstate::stacks::db::{ChainStateBootData, ClarityTx, StacksChainState};
+use stacks::chainstate::stacks::db::{ChainStateBootData, StacksChainState};
 use stacks::net::atlas::{AtlasConfig, Attachment};
-use stacks::vm::types::{PrincipalData, Value};
 use stx_genesis::GenesisData;
 
 use crate::monitoring::start_serving_monitoring_metrics;
@@ -24,7 +23,7 @@ use crate::node::use_test_genesis_chainstate;
 use crate::syncctl::PoxSyncWatchdog;
 use crate::{
     node::{get_account_balances, get_account_lockups, get_names, get_namespaces},
-    util, BitcoinRegtestController, BurnchainController, Config, EventDispatcher, Keychain,
+    BitcoinRegtestController, BurnchainController, Config, EventDispatcher, Keychain,
     NeonGenesisNode,
 };
 
@@ -145,6 +144,11 @@ impl RunLoop {
             )
             .unwrap();
             info!("Miner node: checking UTXOs at address: {}", btc_addr);
+
+            match burnchain.create_wallet_if_dne() {
+                Err(e) => warn!("Error when creating wallet: {:?}", e),
+                _ => {}
+            }
 
             let utxos =
                 burnchain.get_utxos(&keychain.generate_op_signer().get_public_key(), 1, None, 0);
@@ -310,7 +314,27 @@ impl RunLoop {
         };
 
         // TODO (hack) instantiate the sortdb in the burnchain
-        let _ = burnchain.sortdb_mut();
+        let sortdb = burnchain.sortdb_mut();
+        let mut block_height = {
+            let (stacks_ch, _) = SortitionDB::get_canonical_stacks_chain_tip_hash(sortdb.conn())
+                .expect("BUG: failed to load canonical stacks chain tip hash");
+
+            match SortitionDB::get_block_snapshot_consensus(sortdb.conn(), &stacks_ch)
+                .expect("BUG: failed to query sortition DB")
+            {
+                Some(sn) => burnchain_config.reward_cycle_to_block_height(
+                    burnchain_config
+                        .block_height_to_reward_cycle(sn.block_height)
+                        .expect("BUG: snapshot preceeds first reward cycle"),
+                ),
+                None => {
+                    let sn = SortitionDB::get_first_block_snapshot(&sortdb.conn())
+                        .expect("BUG: failed to get first-ever block snapshot");
+
+                    sn.block_height
+                }
+            }
+        };
 
         // Start the runloop
         trace!("Begin run loop");
@@ -326,14 +350,17 @@ impl RunLoop {
                 .unwrap();
         }
 
-        let mut block_height = 1.max(burnchain_config.first_block_height);
-
         let mut burnchain_height = block_height;
         let mut num_sortitions_in_last_cycle = 1;
         let mut learned_burnchain_height = false;
 
         // prepare to fetch the first reward cycle!
         target_burnchain_block_height = burnchain_height + pox_constants.reward_cycle_length as u64;
+
+        debug!(
+            "Begin main runloop starting a burnchain block {}",
+            block_height
+        );
 
         loop {
             // Orchestrating graceful termination

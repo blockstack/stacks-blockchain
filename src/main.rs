@@ -719,25 +719,25 @@ simulating a miner.
         // initial argon balances -- see testnet/stacks-node/conf/testnet-follower-conf.toml
         let initial_balances = vec![
             (
-                StacksAddress::from_string("STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6")
+                StacksAddress::from_string("ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2")
                     .unwrap()
                     .to_account_principal(),
                 10000000000000000,
             ),
             (
-                StacksAddress::from_string("ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y")
+                StacksAddress::from_string("ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF")
                     .unwrap()
                     .to_account_principal(),
                 10000000000000000,
             ),
             (
-                StacksAddress::from_string("ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR")
+                StacksAddress::from_string("ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H")
                     .unwrap()
                     .to_account_principal(),
                 10000000000000000,
             ),
             (
-                StacksAddress::from_string("STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP")
+                StacksAddress::from_string("ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B")
                     .unwrap()
                     .to_account_principal(),
                 10000000000000000,
@@ -755,8 +755,13 @@ simulating a miner.
         let burnchain = Burnchain::regtest(&burnchain_db_path);
         let first_burnchain_block_height = burnchain.first_block_height;
         let first_burnchain_block_hash = burnchain.first_block_hash;
-        let indexer: BitcoinIndexer = burnchain.make_indexer().unwrap();
-        let (mut new_sortition_db, _) = burnchain.connect_db(&indexer, true).unwrap();
+        let (mut new_sortition_db, _) = burnchain
+            .connect_db(
+                true,
+                first_burnchain_block_hash,
+                BITCOIN_REGTEST_FIRST_BLOCK_TIMESTAMP.into(),
+            )
+            .unwrap();
 
         let old_burnchaindb = BurnchainDB::connect(
             &old_burnchaindb_path,
@@ -839,7 +844,13 @@ simulating a miner.
         let mut known_stacks_blocks = HashSet::new();
         let mut next_arrival = 0;
 
-        let (p2p_new_sortition_db, _) = burnchain.connect_db(&indexer, true).unwrap();
+        let (p2p_new_sortition_db, _) = burnchain
+            .connect_db(
+                true,
+                first_burnchain_block_hash,
+                BITCOIN_REGTEST_FIRST_BLOCK_TIMESTAMP.into(),
+            )
+            .unwrap();
         let (mut p2p_chainstate, _) = StacksChainState::open_with_block_limit(
             false,
             0x80000000,

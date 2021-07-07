@@ -57,13 +57,6 @@ pub trait BurnchainBlockParser {
 pub trait BurnchainIndexer {
     type P: BurnchainBlockParser + Send + Sync;
 
-    fn init(
-        working_dir: &String,
-        network_name: &String,
-        first_block_height: u64,
-    ) -> Result<Self, burnchain_error>
-    where
-        Self: Sized;
     fn connect(&mut self) -> Result<(), burnchain_error>;
 
     fn get_first_block_height(&self) -> u64;

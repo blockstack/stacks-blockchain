@@ -538,27 +538,27 @@ mod tests {
     fn deserialize_nonminimal_vec() {
         match deserialize::<Vec<u8>>(&[0xfd, 0x00, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
         match deserialize::<Vec<u8>>(&[0xfd, 0xfc, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
         match deserialize::<Vec<u8>>(&[0xfe, 0xff, 0x00, 0x00, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
         match deserialize::<Vec<u8>>(&[0xfe, 0xff, 0xff, 0x00, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
         match deserialize::<Vec<u8>>(&[0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
         match deserialize::<Vec<u8>>(&[0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00]) {
             Err(Error::ParseFailed("non-minimal varint")) => {}
-            x => panic!(x),
+            x => std::panic::panic_any(x),
         }
 
         let mut vec_256 = vec![0; 259];

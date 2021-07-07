@@ -168,13 +168,13 @@ mod test {
 
         let mut tmp_buf = [0u8; 3];
         let e = retry_reader.read_exact(&mut tmp_buf);
-        let e_str = format!("{:?}", &e);
-        assert!(e.is_err(), e_str);
+        assert!(e.is_err(), "{:?}", &e);
         assert!(
-            format!("{:?}", &e.unwrap_err())
+            format!("{:?}", &e.as_ref().unwrap_err())
                 .find("failed to fill whole buffer")
                 .is_some(),
-            e_str
+            "{:?}",
+            &e
         );
 
         let res = retry_reader.read(&mut tmp_buf);

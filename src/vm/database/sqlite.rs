@@ -44,7 +44,7 @@ fn sqlite_put(conn: &Connection, key: &str, value: &str) {
         Ok(_) => {}
         Err(e) => {
             error!("Failed to insert/replace ({},{}): {:?}", key, value, &e);
-            panic!(SQL_FAIL_MESSAGE);
+            panic!("{}", SQL_FAIL_MESSAGE);
         }
     };
 }
@@ -63,7 +63,7 @@ fn sqlite_get(conn: &Connection, key: &str) -> Option<String> {
         Ok(x) => x,
         Err(e) => {
             error!("Failed to query '{}': {:?}", key, &e);
-            panic!(SQL_FAIL_MESSAGE);
+            panic!("{}", SQL_FAIL_MESSAGE);
         }
     };
 
@@ -105,7 +105,7 @@ impl SqliteConnection {
                 &value.to_string(),
                 &e
             );
-            panic!(SQL_FAIL_MESSAGE);
+            panic!("{}", SQL_FAIL_MESSAGE);
         }
     }
 
@@ -116,14 +116,14 @@ impl SqliteConnection {
             &params,
         ) {
             error!("Failed to update {} to {}: {:?}", &from, &to, &e);
-            panic!(SQL_FAIL_MESSAGE);
+            panic!("{}", SQL_FAIL_MESSAGE);
         }
     }
 
     pub fn drop_metadata(conn: &Connection, from: &StacksBlockId) {
         if let Err(e) = conn.execute("DELETE FROM metadata_table WHERE blockhash = ?", &[from]) {
             error!("Failed to drop metadata from {}: {:?}", &from, &e);
-            panic!(SQL_FAIL_MESSAGE);
+            panic!("{}", SQL_FAIL_MESSAGE);
         }
     }
 
@@ -147,7 +147,7 @@ impl SqliteConnection {
             Ok(x) => x,
             Err(e) => {
                 error!("Failed to query ({},{}): {:?}", &bhh, &key, &e);
-                panic!(SQL_FAIL_MESSAGE);
+                panic!("{}", SQL_FAIL_MESSAGE);
             }
         }
     }

@@ -167,7 +167,7 @@ impl CoordinatorChannels {
                 return false;
             }
             thread::sleep(Duration::from_millis(100));
-            std::sync::atomic::spin_loop_hint();
+            std::hint::spin_loop();
         }
         return true;
     }
@@ -179,7 +179,7 @@ impl CoordinatorChannels {
                 return false;
             }
             thread::sleep(Duration::from_millis(100));
-            std::sync::atomic::spin_loop_hint();
+            std::hint::spin_loop();
         }
         return true;
     }

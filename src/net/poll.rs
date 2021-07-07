@@ -211,12 +211,10 @@ impl NetworkState {
 
         assert!(
             self.event_map.len() <= self.event_capacity + self.servers.len(),
-            format!(
-                "BUG: event map exceeded event capacity ({} > {} + {})",
-                self.event_map.len(),
-                self.event_capacity,
-                self.servers.len()
-            )
+            "BUG: event map exceeded event capacity ({} > {} + {})",
+            self.event_map.len(),
+            self.event_capacity,
+            self.servers.len()
         );
 
         self.poll

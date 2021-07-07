@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::codec::StacksMessageCodec;
 use crate::types::chainstate::StacksAddress;
+use crate::{codec::StacksMessageCodec, types::chainstate::StacksMicroblockHeader};
 use burnchains::Txid;
 use chainstate::stacks::StacksTransaction;
 use vm::analysis::ContractAnalysis;
@@ -60,6 +60,7 @@ pub struct StacksTransactionReceipt {
     pub stx_burned: u128,
     pub contract_analysis: Option<ContractAnalysis>,
     pub execution_cost: ExecutionCost,
+    pub microblock_header: Option<StacksMicroblockHeader>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

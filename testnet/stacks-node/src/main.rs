@@ -100,19 +100,7 @@ fn main() {
             args.finish().unwrap();
             ConfigFile::helium()
         }
-        "neon" => {
-            args.finish().unwrap();
-            ConfigFile::neon()
-        }
-        "argon" => {
-            args.finish().unwrap();
-            ConfigFile::argon()
-        }
-        "krypton" => {
-            args.finish().unwrap();
-            ConfigFile::krypton()
-        }
-        "xenon" => {
+        "testnet" => {
             args.finish().unwrap();
             ConfigFile::xenon()
         }
@@ -223,7 +211,7 @@ helium\t\tStart a node based on a local setup relying on a local instance of bit
 \t\t  rpcuser=helium
 \t\t  rpcpassword=helium
 
-xenon\t\tStart a node that will join and stream blocks from the public xenon testnet, decentralized.
+testnet\t\tStart a node that will join and stream blocks from the public testnet, relying on Bitcoin Testnet.
 
 start\t\tStart a node with a config of your own. Can be used for joining a network, starting new chain, etc.
 \t\tArguments:

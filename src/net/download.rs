@@ -441,102 +441,104 @@ impl BlockDownloader {
         // requests that are still pending
         let mut pending_block_requests = HashMap::new();
 
-        for (block_key, event_id) in self.getblock_requests.drain() {
-            match network.http.get_conversation(event_id) {
-                None => {
-                    if network.http.is_connecting(event_id) {
-                        debug!(
-                            "Event {} ({:?}, {:?} for block {} is not connected yet",
-                            event_id,
-                            &block_key.neighbor,
-                            &block_key.data_url,
-                            &block_key.index_block_hash
-                        );
-                        pending_block_requests.insert(block_key, event_id);
-                    } else {
-                        self.dead_peers.push(event_id);
-
-                        let is_always_allowed = match PeerDB::get_peer(
-                            &network.peerdb.conn(),
-                            block_key.neighbor.network_id,
-                            &block_key.neighbor.addrbytes,
-                            block_key.neighbor.port,
-                        ) {
-                            Ok(Some(neighbor)) => neighbor.is_always_allowed(),
-                            _ => false,
-                        };
-
-                        if !is_always_allowed {
-                            debug!("Event {} ({:?}, {:?}) for block {} failed to connect. Temporarily blocking URL", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
-
-                            // don't try this again for a while
-                            self.blocked_urls.insert(
-                                block_key.data_url,
-                                get_epoch_time_secs() + BLOCK_DOWNLOAD_BAN_URL,
+        PeerNetwork::with_http(network, |ref mut network, ref mut http| {
+            for (block_key, event_id) in self.getblock_requests.drain() {
+                match http.get_conversation(event_id) {
+                    None => {
+                        if http.is_connecting(event_id) {
+                            debug!(
+                                "Event {} ({:?}, {:?} for block {} is not connected yet",
+                                event_id,
+                                &block_key.neighbor,
+                                &block_key.data_url,
+                                &block_key.index_block_hash
                             );
+                            pending_block_requests.insert(block_key, event_id);
                         } else {
-                            debug!("Event {} ({:?}, {:?}, always-allowed) for block {} failed to connect", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
+                            self.dead_peers.push(event_id);
 
-                            if cfg!(test) {
-                                // just mark that we would have blocked it
-                                self.blocked_urls
-                                    .insert(block_key.data_url, get_epoch_time_secs() + 10);
+                            let is_always_allowed = match PeerDB::get_peer(
+                                &network.peerdb.conn(),
+                                block_key.neighbor.network_id,
+                                &block_key.neighbor.addrbytes,
+                                block_key.neighbor.port,
+                            ) {
+                                Ok(Some(neighbor)) => neighbor.is_always_allowed(),
+                                _ => false,
+                            };
+
+                            if !is_always_allowed {
+                                debug!("Event {} ({:?}, {:?}) for block {} failed to connect. Temporarily blocking URL", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
+
+                                // don't try this again for a while
+                                self.blocked_urls.insert(
+                                    block_key.data_url,
+                                    get_epoch_time_secs() + BLOCK_DOWNLOAD_BAN_URL,
+                                );
+                            } else {
+                                debug!("Event {} ({:?}, {:?}, always-allowed) for block {} failed to connect", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
+
+                                if cfg!(test) {
+                                    // just mark that we would have blocked it
+                                    self.blocked_urls
+                                        .insert(block_key.data_url, get_epoch_time_secs() + 10);
+                                }
                             }
                         }
                     }
-                }
-                Some(ref mut convo) => {
-                    match convo.try_get_response() {
-                        None => {
-                            // still waiting
-                            debug!("Event {} ({:?}, {:?} for block {}) is still waiting for a response", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
-                            pending_block_requests.insert(block_key, event_id);
-                        }
-                        Some(http_response) => match http_response {
-                            HttpResponseType::Block(_md, block) => {
-                                if StacksBlockHeader::make_index_block_hash(
-                                    &block_key.consensus_hash,
-                                    &block.block_hash(),
-                                ) != block_key.index_block_hash
-                                {
-                                    info!("Invalid block from {:?} ({:?}): did not ask for block {}/{}", &block_key.neighbor, &block_key.data_url, block_key.consensus_hash, block.block_hash());
+                    Some(ref mut convo) => {
+                        match convo.try_get_response() {
+                            None => {
+                                // still waiting
+                                debug!("Event {} ({:?}, {:?} for block {}) is still waiting for a response", event_id, &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
+                                pending_block_requests.insert(block_key, event_id);
+                            }
+                            Some(http_response) => match http_response {
+                                HttpResponseType::Block(_md, block) => {
+                                    if StacksBlockHeader::make_index_block_hash(
+                                        &block_key.consensus_hash,
+                                        &block.block_hash(),
+                                    ) != block_key.index_block_hash
+                                    {
+                                        info!("Invalid block from {:?} ({:?}): did not ask for block {}/{}", &block_key.neighbor, &block_key.data_url, block_key.consensus_hash, block.block_hash());
+                                        self.broken_peers.push(event_id);
+                                        self.broken_neighbors.push(block_key.neighbor.clone());
+                                    } else {
+                                        // got the block
+                                        debug!(
+                                            "Got block {}: {}/{}",
+                                            &block_key.sortition_height,
+                                            &block_key.consensus_hash,
+                                            block.block_hash()
+                                        );
+                                        self.blocks.insert(block_key, block);
+                                    }
+                                }
+                                // TODO: redirect?
+                                HttpResponseType::NotFound(_, _) => {
+                                    // remote peer didn't have the block
+                                    info!("Remote neighbor {:?} ({:?}) does not actually have block {} indexed at {} ({})", &block_key.neighbor, &block_key.data_url, block_key.sortition_height, &block_key.index_block_hash, &block_key.consensus_hash);
+
+                                    // the fact that we asked this peer means that it's block inv indicated
+                                    // it was present, so the absence is the mark of a broken peer
                                     self.broken_peers.push(event_id);
                                     self.broken_neighbors.push(block_key.neighbor.clone());
-                                } else {
-                                    // got the block
-                                    debug!(
-                                        "Got block {}: {}/{}",
-                                        &block_key.sortition_height,
-                                        &block_key.consensus_hash,
-                                        block.block_hash()
-                                    );
-                                    self.blocks.insert(block_key, block);
                                 }
-                            }
-                            // TODO: redirect?
-                            HttpResponseType::NotFound(_, _) => {
-                                // remote peer didn't have the block
-                                info!("Remote neighbor {:?} ({:?}) does not actually have block {} indexed at {} ({})", &block_key.neighbor, &block_key.data_url, block_key.sortition_height, &block_key.index_block_hash, &block_key.consensus_hash);
-
-                                // the fact that we asked this peer means that it's block inv indicated
-                                // it was present, so the absence is the mark of a broken peer
-                                self.broken_peers.push(event_id);
-                                self.broken_neighbors.push(block_key.neighbor.clone());
-                            }
-                            _ => {
-                                // wrong message response
-                                info!(
-                                    "Got bad HTTP response from {:?}: {:?}",
-                                    &block_key.data_url, &http_response
-                                );
-                                self.broken_peers.push(event_id);
-                                self.broken_neighbors.push(block_key.neighbor.clone());
-                            }
-                        },
+                                _ => {
+                                    // wrong message response
+                                    info!(
+                                        "Got bad HTTP response from {:?}: {:?}",
+                                        &block_key.data_url, &http_response
+                                    );
+                                    self.broken_peers.push(event_id);
+                                    self.broken_neighbors.push(block_key.neighbor.clone());
+                                }
+                            },
+                        }
                     }
                 }
             }
-        }
+        });
 
         // are we done?
         if pending_block_requests.len() == 0 {
@@ -568,93 +570,95 @@ impl BlockDownloader {
         // requests that are still pending
         let mut pending_microblock_requests = HashMap::new();
 
-        for (block_key, event_id) in self.getmicroblocks_requests.drain() {
-            let rh_block_key = block_key.clone();
-            match network.http.get_conversation(event_id) {
-                None => {
-                    if network.http.is_connecting(event_id) {
-                        debug!("Event {} ({:?}, {:?} for microblocks built by ({}) is not connected yet", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash, event_id);
-                        pending_microblock_requests.insert(block_key, event_id);
-                    } else {
-                        self.dead_peers.push(event_id);
+        PeerNetwork::with_http(network, |ref mut network, ref mut http| {
+            for (block_key, event_id) in self.getmicroblocks_requests.drain() {
+                let rh_block_key = block_key.clone();
+                match http.get_conversation(event_id) {
+                    None => {
+                        if http.is_connecting(event_id) {
+                            debug!("Event {} ({:?}, {:?} for microblocks built by ({}) is not connected yet", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash, event_id);
+                            pending_microblock_requests.insert(block_key, event_id);
+                        } else {
+                            self.dead_peers.push(event_id);
 
-                        let is_always_allowed = match PeerDB::get_peer(
-                            &network.peerdb.conn(),
-                            block_key.neighbor.network_id,
-                            &block_key.neighbor.addrbytes,
-                            block_key.neighbor.port,
-                        ) {
-                            Ok(Some(neighbor)) => neighbor.is_always_allowed(),
-                            _ => false,
-                        };
+                            let is_always_allowed = match PeerDB::get_peer(
+                                &network.peerdb.conn(),
+                                block_key.neighbor.network_id,
+                                &block_key.neighbor.addrbytes,
+                                block_key.neighbor.port,
+                            ) {
+                                Ok(Some(neighbor)) => neighbor.is_always_allowed(),
+                                _ => false,
+                            };
 
-                        if !is_always_allowed {
-                            debug!(
-                                "Event {} ({:?}, {:?} for microblocks built by ({}) failed to connect.  Temporarily blocking URL.",
-                                event_id,
-                                &block_key.neighbor,
-                                &block_key.data_url,
-                                &block_key.index_block_hash,
-                            );
+                            if !is_always_allowed {
+                                debug!(
+                                    "Event {} ({:?}, {:?} for microblocks built by ({}) failed to connect.  Temporarily blocking URL.",
+                                    event_id,
+                                    &block_key.neighbor,
+                                    &block_key.data_url,
+                                    &block_key.index_block_hash,
+                                );
 
-                            // don't try this again for a while
-                            self.blocked_urls.insert(
-                                block_key.data_url,
-                                get_epoch_time_secs() + BLOCK_DOWNLOAD_BAN_URL,
-                            );
+                                // don't try this again for a while
+                                self.blocked_urls.insert(
+                                    block_key.data_url,
+                                    get_epoch_time_secs() + BLOCK_DOWNLOAD_BAN_URL,
+                                );
+                            }
                         }
                     }
-                }
-                Some(ref mut convo) => {
-                    match convo.try_get_response() {
-                        None => {
-                            // still waiting
-                            debug!("Event {} ({:?}, {:?} for microblocks built by {:?}) is still waiting for a response", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash, event_id);
-                            pending_microblock_requests.insert(rh_block_key, event_id);
-                        }
-                        Some(http_response) => match http_response {
-                            HttpResponseType::Microblocks(_md, microblocks) => {
-                                if microblocks.len() == 0 {
-                                    // we wouldn't have asked for a 0-length stream
-                                    info!("Got unexpected zero-length microblock stream from {:?} ({:?})", &block_key.neighbor, &block_key.data_url);
+                    Some(ref mut convo) => {
+                        match convo.try_get_response() {
+                            None => {
+                                // still waiting
+                                debug!("Event {} ({:?}, {:?} for microblocks built by {:?}) is still waiting for a response", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash, event_id);
+                                pending_microblock_requests.insert(rh_block_key, event_id);
+                            }
+                            Some(http_response) => match http_response {
+                                HttpResponseType::Microblocks(_md, microblocks) => {
+                                    if microblocks.len() == 0 {
+                                        // we wouldn't have asked for a 0-length stream
+                                        info!("Got unexpected zero-length microblock stream from {:?} ({:?})", &block_key.neighbor, &block_key.data_url);
+                                        self.broken_peers.push(event_id);
+                                        self.broken_neighbors.push(block_key.neighbor.clone());
+                                    } else {
+                                        // have microblocks (but we don't know yet if they're well-formed)
+                                        debug!(
+                                            "Got (tentative) microblocks {}: {}/{}-{}",
+                                            block_key.sortition_height,
+                                            &block_key.consensus_hash,
+                                            &block_key.index_block_hash,
+                                            microblocks[0].block_hash()
+                                        );
+                                        self.microblocks.insert(block_key, microblocks);
+                                    }
+                                }
+                                // TODO: redirect?
+                                HttpResponseType::NotFound(_, _) => {
+                                    // remote peer didn't have the microblock, even though their blockinv said
+                                    // they did.
+                                    info!("Remote neighbor {:?} ({:?}) does not have microblock stream indexed at {}", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
+
+                                    // the fact that we asked this peer means that it's block inv indicated
+                                    // it was present, so the absence is the mark of a broken peer.
+                                    // HOWEVER, there has been some bugs recently about nodes reporting
+                                    // invalid microblock streams as present, even though they are
+                                    // truly absent.  Don't punish these peers with a ban; just don't
+                                    // talk to them for a while.
+                                }
+                                _ => {
+                                    // wrong message response
+                                    info!("Got bad HTTP response from {:?}", &block_key.data_url);
                                     self.broken_peers.push(event_id);
                                     self.broken_neighbors.push(block_key.neighbor.clone());
-                                } else {
-                                    // have microblocks (but we don't know yet if they're well-formed)
-                                    debug!(
-                                        "Got (tentative) microblocks {}: {}/{}-{}",
-                                        block_key.sortition_height,
-                                        &block_key.consensus_hash,
-                                        &block_key.index_block_hash,
-                                        microblocks[0].block_hash()
-                                    );
-                                    self.microblocks.insert(block_key, microblocks);
                                 }
-                            }
-                            // TODO: redirect?
-                            HttpResponseType::NotFound(_, _) => {
-                                // remote peer didn't have the microblock, even though their blockinv said
-                                // they did.
-                                info!("Remote neighbor {:?} ({:?}) does not have microblock stream indexed at {}", &block_key.neighbor, &block_key.data_url, &block_key.index_block_hash);
-
-                                // the fact that we asked this peer means that it's block inv indicated
-                                // it was present, so the absence is the mark of a broken peer.
-                                // HOWEVER, there has been some bugs recently about nodes reporting
-                                // invalid microblock streams as present, even though they are
-                                // truly absent.  Don't punish these peers with a ban; just don't
-                                // talk to them for a while.
-                            }
-                            _ => {
-                                // wrong message response
-                                info!("Got bad HTTP response from {:?}", &block_key.data_url);
-                                self.broken_peers.push(event_id);
-                                self.broken_neighbors.push(block_key.neighbor.clone());
-                            }
-                        },
+                            },
+                        }
                     }
                 }
             }
-        }
+        });
 
         // are we done?
         if pending_microblock_requests.len() == 0 {
@@ -729,11 +733,19 @@ impl BlockDownloader {
                 last_ancestor.block_height,
                 &last_ancestor.consensus_hash
             );
-            let local_blocks = ic.get_stacks_header_hashes(
-                sortition_height_end - sortition_height_start,
-                &last_ancestor.consensus_hash,
-                header_cache,
-            )?;
+            let local_blocks = ic
+                .get_stacks_header_hashes(
+                    sortition_height_end - sortition_height_start,
+                    &last_ancestor.consensus_hash,
+                    header_cache,
+                )
+                .map_err(|e| {
+                    if let db_error::InvalidPoxSortition = e {
+                        net_error::Transient("Invalid PoX sortition; try again".to_string())
+                    } else {
+                        net_error::DBError(e)
+                    }
+                })?;
 
             for (_i, (_consensus_hash, _block_hash_opt)) in local_blocks.iter().enumerate() {
                 test_debug!(
@@ -773,7 +785,8 @@ impl BlockDownloader {
                         }
                     }
                     test_debug!(
-                        "at sortition height {} (block bit {}): {:?}/{:?} blocks available from {:?}",
+                        "{:?}: At sortition height {} (block bit {}): {:?}/{:?} blocks available from {:?}",
+                        _local_peer,
                         sortition_bit - 1,
                         sortition_bit + first_block_height,
                         &consensus_hash,
@@ -785,7 +798,8 @@ impl BlockDownloader {
                 None => {
                     // no sortition
                     test_debug!(
-                        "at sortition height {} (block bit {}): {:?}/(no sortition)",
+                        "{:?}: At sortition height {} (block bit {}): {:?}/(no sortition)",
+                        _local_peer,
                         sortition_bit - 1,
                         sortition_bit + first_block_height,
                         &consensus_hash
@@ -795,8 +809,9 @@ impl BlockDownloader {
                     if cfg!(test) {
                         for (_nk, stats) in inv_state.block_stats.iter() {
                             if stats.inv.has_ith_block(sortition_bit + first_block_height) {
-                                test_debug!(
-                                    "BUT! Neighbor {:?} has block bit {} set!: {:?}",
+                                debug!(
+                                    "{:?}: BUT! Neighbor {:?} has block bit {} set!: {:?}",
+                                    _local_peer,
                                     &_nk,
                                     sortition_bit + first_block_height,
                                     &stats
@@ -814,6 +829,7 @@ impl BlockDownloader {
     /// Find out which neighbors can serve a confirmed microblock stream, given the
     /// burn/block-header-hashes of the sortition that _produced_ them.
     fn get_microblock_stream_availability(
+        _local_peer: &LocalPeer,
         inv_state: &InvState,
         sortdb: &SortitionDB,
         consensus_hash: &ConsensusHash,
@@ -837,7 +853,8 @@ impl BlockDownloader {
         let mut neighbors = vec![];
         for (nk, stats) in inv_state.block_stats.iter() {
             test_debug!(
-                "stats for {:?}: {:?}; testing block {}",
+                "{:?}: stats for {:?}: {:?}; testing block {}",
+                _local_peer,
                 &nk,
                 &stats,
                 block_height
@@ -846,8 +863,9 @@ impl BlockDownloader {
                 neighbors.push(nk.clone());
             }
         }
-        test_debug!(
-            "at sortition height {} (block {}): {:?}/{:?} microblocks available from {:?}",
+        debug!(
+            "{:?}: At sortition height {} (block {}): {:?}/{:?} microblocks available from {:?}",
+            _local_peer,
             block_height - sortdb.first_block_height + 1,
             block_height,
             consensus_hash,
@@ -872,9 +890,14 @@ impl BlockDownloader {
 
     /// Set a hint that a block is now available from a remote peer, if we're idling or we're ahead
     /// of the given height.
-    pub fn hint_block_sortition_height_available(&mut self, block_sortition_height: u64) -> () {
-        if self.empty_block_download_passes > 0
-            || block_sortition_height < self.block_sortition_height + 1
+    pub fn hint_block_sortition_height_available(
+        &mut self,
+        block_sortition_height: u64,
+        ibd: bool,
+    ) -> () {
+        if (ibd && self.state == BlockDownloaderState::DNSLookupBegin)
+            || (self.empty_block_download_passes > 0
+                || block_sortition_height < self.block_sortition_height + 1)
         {
             // idling on new blocks to fetch
             self.empty_block_download_passes = 0;
@@ -887,6 +910,14 @@ impl BlockDownloader {
                 block_sortition_height.saturating_sub(1)
             );
         }
+        if ibd && self.state != BlockDownloaderState::DNSLookupBegin {
+            debug!(
+                "Will NOT awaken downloader to start scanning at block sortiton height {}, because it is busy at {} in state {:?}",
+                block_sortition_height.saturating_sub(1),
+                self.block_sortition_height,
+                self.state
+            );
+        }
     }
 
     /// Set a hint that a confirmed microblock stream is now available from a remote peer, if we're idling or we're ahead
@@ -894,9 +925,11 @@ impl BlockDownloader {
     pub fn hint_microblock_sortition_height_available(
         &mut self,
         mblock_sortition_height: u64,
+        ibd: bool,
     ) -> () {
-        if self.empty_microblock_download_passes > 0
-            || mblock_sortition_height < self.microblock_sortition_height + 1
+        if (ibd && self.state == BlockDownloaderState::DNSLookupBegin)
+            || (self.empty_microblock_download_passes > 0
+                || mblock_sortition_height < self.microblock_sortition_height + 1)
         {
             // idling on new blocks to fetch
             self.empty_microblock_download_passes = 0;
@@ -908,24 +941,20 @@ impl BlockDownloader {
                 mblock_sortition_height.saturating_sub(1)
             );
         }
+        if ibd && self.state != BlockDownloaderState::DNSLookupBegin {
+            debug!(
+                "Will NOT awaken downloader to start scanning at microblock sortiton height {}, because it is busy at {} in state {:?}",
+                mblock_sortition_height.saturating_sub(1),
+                self.microblock_sortition_height,
+                self.state
+            );
+        }
     }
 
     /// Set a hint that we should re-scan for blocks
-    pub fn hint_download_rescan(&mut self, target_height: u64) -> () {
-        if self.empty_block_download_passes > 0 {
-            self.empty_block_download_passes = 0;
-            self.next_block_sortition_height = target_height;
-        }
-
-        if self.empty_microblock_download_passes > 0 {
-            self.empty_microblock_download_passes = 0;
-            self.next_microblock_sortition_height = target_height;
-        }
-
-        debug!(
-            "Awaken downloader to restart scanning at sortition height {}",
-            target_height
-        );
+    pub fn hint_download_rescan(&mut self, target_sortition_height: u64, ibd: bool) -> () {
+        self.hint_block_sortition_height_available(target_sortition_height, ibd);
+        self.hint_microblock_sortition_height_available(target_sortition_height, ibd);
     }
 
     // are we doing the initial block download?
@@ -999,9 +1028,9 @@ impl PeerNetwork {
     }
 
     /// Pass a hint to the downloader to re-scan
-    pub fn hint_download_rescan(&mut self, target_height: u64) -> () {
+    pub fn hint_download_rescan(&mut self, target_height: u64, ibd: bool) -> () {
         match self.block_downloader {
-            Some(ref mut dl) => dl.hint_download_rescan(target_height),
+            Some(ref mut dl) => dl.hint_download_rescan(target_height, ibd),
             None => {}
         }
     }
@@ -1240,12 +1269,9 @@ impl PeerNetwork {
                     continue;
                 }
 
-                test_debug!(
+                debug!(
                     "{:?}: Do not have anchored block {}/{} ({})",
-                    &self.local_peer,
-                    &consensus_hash,
-                    &block_hash,
-                    &index_block_hash
+                    &self.local_peer, &consensus_hash, &block_hash, &index_block_hash
                 );
 
                 (consensus_hash, block_hash)
@@ -1339,6 +1365,7 @@ impl PeerNetwork {
                     // microblocks built off of this block's _parent_)
                     let mut microblock_stream_neighbors = match self.inv_state {
                         Some(ref inv_state) => BlockDownloader::get_microblock_stream_availability(
+                            &self.local_peer,
                             inv_state,
                             sortdb,
                             &consensus_hash,
@@ -1381,9 +1408,20 @@ impl PeerNetwork {
                 &target_block_hash,
             );
 
-            // don't request the same data from the same data url, in case multiple peers report the
-            // same data url (e.g. two peers sharing a Gaia hub).
-            let block_urls: HashSet<UrlString> = HashSet::new();
+            debug!(
+                "{:?}: Consider {} sortition {} {}/{} from {} neighbors",
+                &self.local_peer,
+                if microblocks {
+                    "microblock stream"
+                } else {
+                    "anchored block"
+                },
+                start_sortition_height + (i as u64),
+                &target_consensus_hash,
+                &target_block_hash,
+                neighbors.len()
+            );
+
             (&mut neighbors[..]).shuffle(&mut thread_rng());
 
             let mut requests = VecDeque::new();
@@ -1391,15 +1429,20 @@ impl PeerNetwork {
                 let data_url = match self.get_data_url(&nk) {
                     Some(url) => url,
                     None => {
+                        debug!(
+                            "{:?}: Unable to request {} from {}: no data URL",
+                            &self.local_peer, &target_index_block_hash, &nk
+                        );
                         continue;
                     }
                 };
                 if data_url.len() == 0 {
                     // peer doesn't yet know its public IP address, and isn't given a data URL
                     // directly
-                    continue;
-                }
-                if block_urls.contains(&data_url) {
+                    debug!(
+                        "{:?}: Unable to request {} from {}: no data URL",
+                        &self.local_peer, &target_index_block_hash, &nk
+                    );
                     continue;
                 }
 
@@ -1428,7 +1471,7 @@ impl PeerNetwork {
                     continue;
                 }
 
-                test_debug!(
+                debug!(
                     "{:?}: Make request for {} at sortition height {} to {:?}: {:?}/{:?}",
                     &self.local_peer,
                     if microblocks {
@@ -1851,33 +1894,35 @@ impl PeerNetwork {
         request: HttpRequestType,
         chainstate: &mut StacksChainState,
     ) -> Result<usize, net_error> {
-        PeerNetwork::with_network_state(
-            self,
-            |ref mut network, ref mut network_state| match network.http.connect_http(
-                network_state,
-                data_url.clone(),
-                addr.clone(),
-                Some(request.clone()),
-            ) {
-                Ok(event_id) => Ok(event_id),
-                Err(net_error::AlreadyConnected(event_id, _)) => {
-                    match network.http.get_conversation_and_socket(event_id) {
-                        (Some(ref mut convo), Some(ref mut socket)) => {
-                            convo.send_request(request)?;
-                            HttpPeer::saturate_http_socket(socket, convo, chainstate)?;
-                            Ok(event_id)
-                        }
-                        (_, _) => {
-                            debug!("HTTP failed to connect to {:?}, {:?}", &data_url, &addr);
-                            Err(net_error::PeerNotConnected)
+        PeerNetwork::with_network_state(self, |ref mut network, ref mut network_state| {
+            PeerNetwork::with_http(network, |ref mut network, ref mut http| {
+                match http.connect_http(
+                    network_state,
+                    network,
+                    data_url.clone(),
+                    addr.clone(),
+                    Some(request.clone()),
+                ) {
+                    Ok(event_id) => Ok(event_id),
+                    Err(net_error::AlreadyConnected(event_id, _)) => {
+                        match http.get_conversation_and_socket(event_id) {
+                            (Some(ref mut convo), Some(ref mut socket)) => {
+                                convo.send_request(request)?;
+                                HttpPeer::saturate_http_socket(socket, convo, chainstate)?;
+                                Ok(event_id)
+                            }
+                            (_, _) => {
+                                debug!("HTTP failed to connect to {:?}, {:?}", &data_url, &addr);
+                                Err(net_error::PeerNotConnected)
+                            }
                         }
                     }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
-                Err(e) => {
-                    return Err(e);
-                }
-            },
-        )
+            })
+        })
     }
 
     /// Start a request, given the list of request keys to consider.  Use the given request_factory to
@@ -2254,7 +2299,8 @@ impl PeerNetwork {
                 for (height, requests) in downloader.blocks_to_try.iter() {
                     assert!(
                         requests.len() > 0,
-                        format!("Empty block requests at height {}", height)
+                        "Empty block requests at height {}",
+                        height
                     );
                     debug!(
                         "   Height {}: anchored block {} available from {} peers: {:?}",
@@ -2270,7 +2316,8 @@ impl PeerNetwork {
                 for (height, requests) in downloader.microblocks_to_try.iter() {
                     assert!(
                         requests.len() > 0,
-                        format!("Empty microblock requests at height {}", height)
+                        "Empty microblock requests at height {}",
+                        height
                     );
                     debug!(
                         "   Height {}: microblocks {} available from {} peers: {:?}",
@@ -2320,6 +2367,7 @@ impl PeerNetwork {
         sortdb: &SortitionDB,
         chainstate: &mut StacksChainState,
         dns_client: &mut DNSClient,
+        ibd: bool,
     ) -> Result<
         (
             bool,
@@ -2332,8 +2380,16 @@ impl PeerNetwork {
         ),
         net_error,
     > {
-        if self.inv_state.is_none() {
-            test_debug!("{:?}: Inv state not initialized yet", &self.local_peer);
+        if let Some(ref inv_state) = self.inv_state {
+            if !inv_state.has_inv_data_for_downloader(ibd) {
+                debug!(
+                    "{:?}: No inventory state tracked, so no download actions to take (ibd={})",
+                    &self.local_peer, ibd
+                );
+                return Err(net_error::NotConnected);
+            }
+        } else {
+            debug!("{:?}: Inv state not initialized yet", &self.local_peer);
             return Err(net_error::NotConnected);
         }
 
@@ -2343,15 +2399,22 @@ impl PeerNetwork {
 
         let mut last_inv_update_at = 0;
         let mut inv_start_sortition = 0;
+        let mut num_inv_states = 0;
         if let Some(ref inv_state) = self.inv_state {
             last_inv_update_at = inv_state.last_change_at;
             inv_start_sortition = inv_state.block_sortition_start;
+            num_inv_states = inv_state.block_stats.len();
         }
 
         match self.block_downloader {
             Some(ref mut downloader) => {
+                debug!("{:?}: Have {} inventory state(s) tracked, so take download actions starting from ({},{}, next {},{}) (ibd={})",
+                       &self.local_peer, num_inv_states, downloader.block_sortition_height, downloader.microblock_sortition_height,
+                       downloader.next_block_sortition_height, downloader.next_microblock_sortition_height, ibd);
+
                 if downloader.empty_block_download_passes > 0
                     && downloader.empty_microblock_download_passes > 0
+                    && !ibd
                 {
                     if downloader.last_inv_update_at == last_inv_update_at
                         && downloader.finished_scan_at + downloader.download_interval

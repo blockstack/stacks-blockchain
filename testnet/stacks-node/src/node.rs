@@ -769,6 +769,31 @@ impl Node {
 
             parent_consensus_hash
         };
+
+        // get previous burn block stats
+        let (parent_burn_block_hash, parent_burn_block_height, parent_burn_block_timestamp) =
+            if anchored_block.is_first_mined() {
+                (BurnchainHeaderHash([0; 32]), 0, 0)
+            } else {
+                match SortitionDB::get_block_snapshot_consensus(db.conn(), &parent_consensus_hash)
+                    .unwrap()
+                {
+                    Some(sn) => (
+                        sn.burn_header_hash,
+                        sn.block_height as u32,
+                        sn.burn_header_timestamp,
+                    ),
+                    None => {
+                        // shouldn't happen
+                        warn!(
+                            "CORRUPTION: block {}/{} does not correspond to a burn block",
+                            &parent_consensus_hash, &anchored_block.header.parent_block
+                        );
+                        (BurnchainHeaderHash([0; 32]), 0, 0)
+                    }
+                }
+            };
+
         let atlas_config = AtlasConfig::default(false);
         let mut processed_blocks = vec![];
         loop {
@@ -841,6 +866,9 @@ impl Node {
             Txid([0; 32]),
             vec![],
             None,
+            parent_burn_block_hash,
+            parent_burn_block_height,
+            parent_burn_block_timestamp,
         );
 
         self.chain_tip = Some(chain_tip.clone());
@@ -919,14 +947,7 @@ impl Node {
         burnchain_tip: &BurnchainTip,
         vrf_seed: VRFSeed,
     ) -> BlockstackOperationType {
-        let winning_tx_vtindex = match (
-            burnchain_tip.get_winning_tx_index(),
-            burnchain_tip.block_snapshot.total_burn,
-        ) {
-            (Some(winning_tx_id), _) => winning_tx_id,
-            (None, 0) => 0,
-            _ => unreachable!(),
-        };
+        let winning_tx_vtindex = burnchain_tip.get_winning_tx_index().unwrap_or(0);
 
         let (parent_block_ptr, parent_vtxindex) = match self.bootstraping_chain {
             true => (0, 0), // parent_block_ptr and parent_vtxindex should both be 0 on block #1

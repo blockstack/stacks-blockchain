@@ -28,7 +28,6 @@ extern crate rand_chacha;
 extern crate rusqlite;
 extern crate secp256k1;
 extern crate serde;
-extern crate tini;
 #[macro_use]
 extern crate lazy_static;
 extern crate integer_sqrt;

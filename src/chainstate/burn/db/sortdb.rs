@@ -2176,7 +2176,7 @@ impl<'a> SortitionDBConn<'a> {
     }
 
     /// Given a burnchain consensus hash,
-    ///    go get the last N Stacks block headers that won sortition
+    /// go get the last N Stacks block headers that won sortition
     /// leading up to the given header hash.  The ith slot in the vector will be Some(...) if there
     /// was a sortition, and None if not.
     /// Returns up to num_headers prior block header hashes.
@@ -2233,10 +2233,11 @@ impl<'a> SortitionDBConn<'a> {
                 ancestor_consensus_hash
             ));
 
-            assert!(
-                ancestor_snapshot.pox_valid,
-                "BUG: ancestor is not on the valid PoX fork"
-            );
+            // this can happen if this call is interleaved with a PoX invalidation transaction
+            if !ancestor_snapshot.pox_valid {
+                warn!("Consensus hash {:?} corresponds to a sortition that is not on the canonical PoX fork", ancestor_consensus_hash);
+                return Err(db_error::InvalidPoxSortition);
+            }
 
             let header_hash_opt = if ancestor_snapshot.sortition {
                 Some(ancestor_snapshot.winning_stacks_block_hash.clone())

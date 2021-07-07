@@ -1043,18 +1043,6 @@ impl BitcoinRegtestController {
             }
         }
 
-        // Stop as soon as the fee_rate is ${self.config.burnchain.max_rbf} percent higher, stop RBF
-        if ongoing_op.fees.fee_rate
-            > (self.config.burnchain.satoshis_per_byte * self.config.burnchain.max_rbf / 100)
-        {
-            warn!(
-                "RBF'd block commits reached {}% satoshi per byte fee rate, not resubmitting",
-                self.config.burnchain.max_rbf
-            );
-            self.ongoing_block_commit = Some(ongoing_op);
-            return None;
-        }
-
         // Did a re-org occurred since we fetched our UTXOs, or are the UTXOs so stale that they should be abandoned?
         let mut traversal_depth = 0;
         let mut burn_chain_tip = burnchain_db.get_canonical_chain_tip().ok()?;
@@ -1079,6 +1067,18 @@ impl BitcoinRegtestController {
             );
             let res = self.send_block_commit_operation(payload, signer, None, None, None, &vec![]);
             return res;
+        }
+
+        // Stop as soon as the fee_rate is ${self.config.burnchain.max_rbf} percent higher, stop RBF
+        if ongoing_op.fees.fee_rate
+            > (self.config.burnchain.satoshis_per_byte * self.config.burnchain.max_rbf / 100)
+        {
+            warn!(
+                "RBF'd block commits reached {}% satoshi per byte fee rate, not resubmitting",
+                self.config.burnchain.max_rbf
+            );
+            self.ongoing_block_commit = Some(ongoing_op);
+            return None;
         }
 
         // An ongoing operation is in the mempool and we received a new block. The desired behaviour is the following:

@@ -2092,7 +2092,7 @@ mod test {
                         Some(ref mut inv_state) => {
                             if inv_state.get_stats(&peer_1_nk).is_none() {
                                 test_debug!("initialize inv statistics for peer 1 in peer 2");
-                                inv_state.add_peer(peer_1_nk.clone());
+                                inv_state.add_peer(peer_1_nk.clone(), true);
 
                                 inv_state
                                     .get_stats_mut(&peer_1_nk)
@@ -2569,7 +2569,7 @@ mod test {
                         Some(ref mut inv_state) => {
                             if inv_state.get_stats(&peer_0_nk).is_none() {
                                 test_debug!("initialize inv statistics for peer 0 in peer 1");
-                                inv_state.add_peer(peer_0_nk);
+                                inv_state.add_peer(peer_0_nk, true);
                             } else {
                                 test_debug!("peer 1 has inv state for peer 0");
                             }
@@ -3104,7 +3104,7 @@ mod test {
                         Some(ref mut inv_state) => {
                             if inv_state.get_stats(&peer_0_nk).is_none() {
                                 test_debug!("initialize inv statistics for peer 0 in peer 1");
-                                inv_state.add_peer(peer_0_nk);
+                                inv_state.add_peer(peer_0_nk, true);
                             } else {
                                 test_debug!("peer 1 has inv state for peer 0");
                             }
@@ -3448,7 +3448,8 @@ mod test {
                 |ref mut peers| {
                     for peer in peers.iter_mut() {
                         // force peers to keep trying to process buffered data
-                        peer.network.last_burnchain_tip = BurnchainHeaderHash([0u8; 32]);
+                        peer.network.burnchain_tip.burn_header_hash =
+                            BurnchainHeaderHash([0u8; 32]);
                     }
 
                     let done_flag = *done.borrow();
@@ -3779,7 +3780,8 @@ mod test {
                 |ref mut peers| {
                     for peer in peers.iter_mut() {
                         // force peers to keep trying to process buffered data
-                        peer.network.last_burnchain_tip = BurnchainHeaderHash([0u8; 32]);
+                        peer.network.burnchain_tip.burn_header_hash =
+                            BurnchainHeaderHash([0u8; 32]);
                     }
 
                     let tip_opt = peers[1]
@@ -3901,7 +3903,8 @@ mod test {
                 |ref mut peers| {
                     for peer in peers.iter_mut() {
                         // force peers to keep trying to process buffered data
-                        peer.network.last_burnchain_tip = BurnchainHeaderHash([0u8; 32]);
+                        peer.network.burnchain_tip.burn_header_hash =
+                            BurnchainHeaderHash([0u8; 32]);
                     }
 
                     let mut i = idx.borrow_mut();

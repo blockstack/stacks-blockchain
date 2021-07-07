@@ -100,25 +100,39 @@ pub enum Opcodes {
 // a burnchain block snapshot
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockSnapshot {
+    /// the burn block height of this sortition
     pub block_height: u64,
     pub burn_header_timestamp: u64,
     pub burn_header_hash: BurnchainHeaderHash,
     pub parent_burn_header_hash: BurnchainHeaderHash,
     pub consensus_hash: ConsensusHash,
     pub ops_hash: OpsHash,
-    pub total_burn: u64, // how many burn tokens have been destroyed since genesis
-    pub sortition: bool, // whether or not a sortition happened in this block (will be false if there were no burns)
-    pub sortition_hash: SortitionHash, // rolling hash of the burn chain's block headers -- this gets mixed with the sortition VRF seed
-    pub winning_block_txid: Txid, // txid of the leader block commit that won sortition.  Will all 0's if sortition is false.
-    pub winning_stacks_block_hash: BlockHeaderHash, // hash of Stacks block that won sortition (will be all 0's if sortition is false)
-    pub index_root: TrieHash, // root hash of the index over the materialized view of all inserted data
-    pub num_sortitions: u64,  // how many stacks blocks exist
-    pub stacks_block_accepted: bool, // did we download, store, and incorporate the stacks block into the chain state
-    pub stacks_block_height: u64,    // if we accepted a block, this is its height
-    pub arrival_index: u64,          // this is the $(arrival_index)-th block to be accepted
-    pub canonical_stacks_tip_height: u64, // memoized canonical stacks chain tip
-    pub canonical_stacks_tip_hash: BlockHeaderHash, // memoized canonical stacks chain tip
-    pub canonical_stacks_tip_consensus_hash: ConsensusHash, // memoized canonical stacks chain tip
+    /// how many burn tokens have been destroyed since genesis
+    pub total_burn: u64,
+    /// whether or not a sortition happened in this block (will be false if there were no burns)
+    pub sortition: bool,
+    /// rolling hash of the burn chain's block headers -- this gets mixed with the sortition VRF seed
+    pub sortition_hash: SortitionHash,
+    /// txid of the leader block commit that won sortition.  Will all 0's if sortition is false.
+    pub winning_block_txid: Txid,
+    /// hash of Stacks block that won sortition (will be all 0's if sortition is false)
+    pub winning_stacks_block_hash: BlockHeaderHash,
+    /// root hash of the index over the materialized view of all inserted data
+    pub index_root: TrieHash,
+    /// how many stacks blocks exist
+    pub num_sortitions: u64,
+    /// did we download, store, and incorporate the stacks block into the chain state
+    pub stacks_block_accepted: bool,
+    /// if we accepted a block, this is its height
+    pub stacks_block_height: u64,
+    /// this is the $(arrival_index)-th block to be accepted
+    pub arrival_index: u64,
+    /// memoized canonical stacks chain tip
+    pub canonical_stacks_tip_height: u64,
+    /// memoized canonical stacks chain tip
+    pub canonical_stacks_tip_hash: BlockHeaderHash,
+    /// memoized canonical stacks chain tip
+    pub canonical_stacks_tip_consensus_hash: ConsensusHash,
     pub sortition_id: SortitionId,
     pub parent_sortition_id: SortitionId,
     pub pox_valid: bool,

@@ -77,6 +77,7 @@ use crate::types::chainstate::{
     StacksAddress, StacksBlockHeader, StacksBlockId, StacksMicroblockHeader,
 };
 use crate::{types, util};
+use types::chainstate::BurnchainHeaderHash;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagingMicroblock {
@@ -3875,10 +3876,11 @@ impl StacksChainState {
         for microblock in microblocks.iter() {
             debug!("Process microblock {}", &microblock.block_hash());
             for tx in microblock.txs.iter() {
-                let (tx_fee, tx_receipt) =
+                let (tx_fee, mut tx_receipt) =
                     StacksChainState::process_transaction(clarity_tx, tx, false)
                         .map_err(|e| (e, microblock.block_hash()))?;
 
+                tx_receipt.microblock_header = Some(microblock.header.clone());
                 fees = fees.checked_add(tx_fee as u128).expect("Fee overflow");
                 burns = burns
                     .checked_add(tx_receipt.stx_burned as u128)
@@ -3946,6 +3948,7 @@ impl StacksChainState {
                             stx_burned: 0,
                             contract_analysis: None,
                             execution_cost,
+                            microblock_header: None,
                         };
 
                         all_receipts.push(receipt);
@@ -3999,6 +4002,7 @@ impl StacksChainState {
                                 stx_burned: 0,
                                 contract_analysis: None,
                                 execution_cost: ExecutionCost::zero(),
+                                microblock_header: None,
                             }),
                             Err(e) => {
                                 info!("TransferStx burn op processing error.";
@@ -4231,6 +4235,9 @@ impl StacksChainState {
             block_execution_cost,
             matured_rewards,
             matured_rewards_info,
+            parent_burn_block_hash,
+            parent_burn_block_height,
+            parent_burn_block_timestamp,
         ) = {
             let (parent_consensus_hash, parent_block_hash) = if block.is_first_mined() {
                 // has to be the sentinal hashes if this block has no parent
@@ -4244,6 +4251,31 @@ impl StacksChainState {
                     parent_chain_tip.anchored_header.block_hash(),
                 )
             };
+
+            // get previous burn block stats
+            let (parent_burn_block_hash, parent_burn_block_height, parent_burn_block_timestamp) =
+                if block.is_first_mined() {
+                    (BurnchainHeaderHash([0; 32]), 0, 0)
+                } else {
+                    match SortitionDB::get_block_snapshot_consensus(
+                        burn_dbconn,
+                        &parent_consensus_hash,
+                    )? {
+                        Some(sn) => (
+                            sn.burn_header_hash,
+                            sn.block_height as u32,
+                            sn.burn_header_timestamp,
+                        ),
+                        None => {
+                            // shouldn't happen
+                            warn!(
+                                "CORRUPTION: block {}/{} does not correspond to a burn block",
+                                &parent_consensus_hash, &parent_block_hash
+                            );
+                            (BurnchainHeaderHash([0; 32]), 0, 0)
+                        }
+                    }
+                };
 
             let (last_microblock_hash, last_microblock_seq) = if microblocks.len() > 0 {
                 let _first_mblock_hash = microblocks[0].block_hash();
@@ -4580,6 +4612,9 @@ impl StacksChainState {
                 block_cost,
                 matured_rewards,
                 matured_rewards_info,
+                parent_burn_block_hash,
+                parent_burn_block_height,
+                parent_burn_block_timestamp,
             )
         };
 
@@ -4614,6 +4649,9 @@ impl StacksChainState {
             matured_rewards_info,
             parent_microblocks_cost: microblock_execution_cost,
             anchored_block_cost: block_execution_cost,
+            parent_burn_block_hash,
+            parent_burn_block_height,
+            parent_burn_block_timestamp,
         };
 
         Ok(epoch_receipt)
@@ -8962,21 +9000,17 @@ pub mod test {
             for j in 0..(i + 1) {
                 assert!(
                     block_inv_all.has_ith_block(j as u16),
-                    format!(
-                        "Missing block {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.block_bitvec)
-                    )
+                    "Missing block {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.block_bitvec)
                 );
 
                 // microblocks not stored yet, so they should be marked absent
                 assert!(
                     !block_inv_all.has_ith_microblock_stream(j as u16),
-                    format!(
-                        "Have microblock {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.microblocks_bitvec)
-                    )
+                    "Have microblock {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.microblocks_bitvec)
                 );
             }
             for j in i + 1..blocks.len() {
@@ -9056,19 +9090,15 @@ pub mod test {
                 test_debug!("Test bit {} ({})", j, i);
                 assert!(
                     !block_inv_all.has_ith_block(j as u16),
-                    format!(
-                        "Have orphaned block {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.block_bitvec)
-                    )
+                    "Have orphaned block {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.block_bitvec)
                 );
                 assert!(
                     !block_inv_all.has_ith_microblock_stream(j as u16),
-                    format!(
-                        "Still have microblock {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.microblocks_bitvec)
-                    )
+                    "Still have microblock {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.microblocks_bitvec)
                 );
             }
             for j in (i + 1)..blocks.len() {

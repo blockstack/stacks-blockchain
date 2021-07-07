@@ -167,7 +167,7 @@ pub trait PrivateKey: Clone + fmt::Debug + serde::Serialize + serde::de::Deseria
 
 pub trait Address: Clone + fmt::Debug + fmt::Display {
     fn to_bytes(&self) -> Vec<u8>;
-    fn from_string(&str) -> Option<Self>
+    fn from_string(from: &str) -> Option<Self>
     where
         Self: Sized;
     fn is_burn(&self) -> bool;
@@ -379,11 +379,11 @@ impl PoxConstants {
 
     pub fn testnet_default() -> PoxConstants {
         PoxConstants::new(
-            50, // 40 reward slots; 10 prepare-phase slots
-            10,
-            6,
-            3333333333333333,
-            1,
+            POX_REWARD_CYCLE_LENGTH / 2,   // 1050
+            POX_PREPARE_WINDOW_LENGTH / 2, // 50
+            40,
+            12,
+            2,
             BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT + POX_SUNSET_START,
             BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT + POX_SUNSET_END,
         ) // total liquid supply is 40000000000000000 µSTX

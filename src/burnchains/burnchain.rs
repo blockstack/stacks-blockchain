@@ -577,17 +577,6 @@ impl Burnchain {
         Ok(())
     }
 
-    pub fn make_indexer<I: BurnchainIndexer>(&self) -> Result<I, burnchain_error> {
-        Burnchain::setup_chainstate_dirs(&self.working_dir)?;
-
-        let indexer: I = BurnchainIndexer::init(
-            &self.working_dir,
-            &self.network_name,
-            self.first_block_height,
-        )?;
-        Ok(indexer)
-    }
-
     fn setup_chainstate<I: BurnchainIndexer>(
         &self,
         indexer: &mut I,
@@ -629,15 +618,13 @@ impl Burnchain {
         db_path
     }
 
-    pub fn connect_db<I: BurnchainIndexer>(
+    pub fn connect_db(
         &self,
-        indexer: &I,
         readwrite: bool,
+        first_block_header_hash: BurnchainHeaderHash,
+        first_block_header_timestamp: u64,
     ) -> Result<(SortitionDB, BurnchainDB), burnchain_error> {
         Burnchain::setup_chainstate_dirs(&self.working_dir)?;
-
-        let first_block_header_hash = indexer.get_first_block_header_hash()?;
-        let first_block_header_timestamp = indexer.get_first_block_header_timestamp()?;
 
         let db_path = self.get_db_path();
         let burnchain_db_path = self.get_burnchaindb_path();
@@ -941,25 +928,6 @@ impl Burnchain {
         }
     }
 
-    /// Top-level burnchain sync.
-    /// Returns new latest block height.
-    pub fn sync<I: BurnchainIndexer + 'static>(
-        &mut self,
-        comms: &CoordinatorChannels,
-        target_block_height_opt: Option<u64>,
-        max_blocks_opt: Option<u64>,
-    ) -> Result<u64, burnchain_error> {
-        let mut indexer: I = self.make_indexer()?;
-        let chain_tip = self.sync_with_indexer(
-            &mut indexer,
-            comms.clone(),
-            target_block_height_opt,
-            max_blocks_opt,
-            None,
-        )?;
-        Ok(chain_tip.block_height)
-    }
-
     /// Deprecated top-level burnchain sync.
     /// Returns (snapshot of new burnchain tip, last state-transition processed if any)
     /// If this method returns Err(burnchain_error::TrySyncAgain), then call this method again.
@@ -968,7 +936,11 @@ impl Burnchain {
         indexer: &mut I,
     ) -> Result<(BlockSnapshot, Option<BurnchainStateTransition>), burnchain_error> {
         self.setup_chainstate(indexer)?;
-        let (mut sortdb, mut burnchain_db) = self.connect_db(indexer, true)?;
+        let (mut sortdb, mut burnchain_db) = self.connect_db(
+            true,
+            indexer.get_first_block_header_hash()?,
+            indexer.get_first_block_header_timestamp()?,
+        )?;
         let burn_chain_tip = burnchain_db.get_canonical_chain_tip().map_err(|e| {
             error!("Failed to query burn chain tip from burn DB: {}", e);
             e
@@ -1185,7 +1157,11 @@ impl Burnchain {
         I: BurnchainIndexer + 'static,
     {
         self.setup_chainstate(indexer)?;
-        let (_, mut burnchain_db) = self.connect_db(indexer, true)?;
+        let (_, mut burnchain_db) = self.connect_db(
+            true,
+            indexer.get_first_block_header_hash()?,
+            indexer.get_first_block_header_timestamp()?,
+        )?;
         let burn_chain_tip = burnchain_db.get_canonical_chain_tip().map_err(|e| {
             error!("Failed to query burn chain tip from burn DB: {}", e);
             e

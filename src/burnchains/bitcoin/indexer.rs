@@ -25,8 +25,6 @@ use std::path::PathBuf;
 use std::time;
 use std::time::Duration;
 
-use tini::Ini;
-
 use burnchains::bitcoin::blocks::BitcoinHeaderIPC;
 use burnchains::bitcoin::messages::BitcoinMessageHandler;
 use burnchains::bitcoin::spv::*;
@@ -46,7 +44,7 @@ use burnchains::BLOCKSTACK_MAGIC_MAINNET;
 use deps::bitcoin::blockdata::block::LoneBlockHeader;
 use deps::bitcoin::network::message::NetworkMessage;
 use deps::bitcoin::network::serialize::BitcoinHash;
-
+use deps::bitcoin::network::serialize::Error as btc_serialization_err;
 use util::log;
 
 pub const USER_AGENT: &'static str = "Stacks/2.0";
@@ -137,165 +135,6 @@ impl BitcoinIndexerConfig {
             magic_bytes: BLOCKSTACK_MAGIC_MAINNET.clone(),
         }
     }
-
-    pub fn to_file(&self, path: &String) -> Result<(), btc_error> {
-        let username = self.username.clone().unwrap_or("".to_string());
-        let password = self.password.clone().unwrap_or("".to_string());
-
-        let conf = Ini::new()
-            .section("bitcoin")
-            .item("server", self.peer_host.as_str())
-            .item("p2p_port", format!("{}", self.peer_port).as_str())
-            .item("rpc_port", format!("{}", self.rpc_port).as_str())
-            .item("rpc_ssl", format!("{}", self.rpc_ssl).as_str())
-            .item("username", username.as_str())
-            .item("password", password.as_str())
-            .item("timeout", format!("{}", self.timeout).as_str())
-            .item("spv_path", self.spv_headers_path.as_str())
-            .item("first_block", format!("{}", self.first_block).as_str())
-            .section("blockstack")
-            .item(
-                "network_id",
-                format!(
-                    "{}{}",
-                    self.magic_bytes.as_bytes()[0] as char,
-                    self.magic_bytes.as_bytes()[1] as char
-                )
-                .as_str(),
-            );
-
-        conf.to_file(&path).map_err(|e| btc_error::Io(e))
-    }
-
-    pub fn from_file(path: &String) -> Result<BitcoinIndexerConfig, btc_error> {
-        let conf_path = PathBuf::from(path);
-        if !conf_path.is_file() {
-            return Err(btc_error::ConfigError(
-                "Failed to load BitcoinIndexerConfig file: No such file or directory".to_string(),
-            ));
-        }
-
-        let default_config = BitcoinIndexerConfig::default(0);
-
-        match Ini::from_file(path) {
-            Ok(ini_file) => {
-                // [bitcoin]
-                let peer_host = ini_file
-                    .get("bitcoin", "server")
-                    .unwrap_or(default_config.peer_host);
-
-                let peer_port = ini_file
-                    .get("bitcoin", "p2p_port")
-                    .unwrap_or(format!("{}", default_config.peer_port))
-                    .trim()
-                    .parse()
-                    .map_err(|_e| {
-                        btc_error::ConfigError("Invalid bitcoin:p2p_port value".to_string())
-                    })?;
-
-                if peer_port <= 1024 || peer_port == 65535 {
-                    return Err(btc_error::ConfigError("Invalid p2p_port".to_string()));
-                }
-
-                let rpc_port = ini_file
-                    .get("bitcoin", "rpc_port")
-                    .unwrap_or(format!("{}", default_config.rpc_port))
-                    .trim()
-                    .parse()
-                    .map_err(|_e| {
-                        btc_error::ConfigError("Invalid bitcoin:port value".to_string())
-                    })?;
-
-                if rpc_port <= 1024 || rpc_port == 65535 {
-                    return Err(btc_error::ConfigError("Invalid rpc_port".to_string()));
-                }
-
-                let username: Option<String> =
-                    ini_file.get("bitcoin", "username").and_then(|s| Some(s));
-                let password: Option<String> =
-                    ini_file.get("bitcoin", "password").and_then(|s| Some(s));
-
-                let timeout = ini_file
-                    .get("bitcoin", "timeout")
-                    .unwrap_or(format!("{}", default_config.timeout))
-                    .trim()
-                    .parse()
-                    .map_err(|_e| {
-                        btc_error::ConfigError("Invalid bitcoin:timeout value".to_string())
-                    })?;
-
-                let spv_headers_path_cfg = ini_file
-                    .get("bitcoin", "spv_path")
-                    .unwrap_or(default_config.spv_headers_path);
-
-                let spv_headers_path =
-                    if path::is_separator(spv_headers_path_cfg.chars().next().ok_or(
-                        btc_error::ConfigError("Invalid bitcoin:spv_path value".to_string()),
-                    )?) {
-                        // absolute
-                        spv_headers_path_cfg
-                    } else {
-                        // relative to config file
-                        let mut p = PathBuf::from(path);
-                        p.pop();
-                        let s = p.join(&spv_headers_path_cfg);
-                        s.to_str().unwrap().to_string()
-                    };
-
-                let first_block = ini_file
-                    .get("bitcoin", "first_block")
-                    .unwrap_or(format!("{}", 0))
-                    .trim()
-                    .parse()
-                    .map_err(|_e| {
-                        btc_error::ConfigError("Invalid bitcoin:first_block value".to_string())
-                    })?;
-
-                let rpc_ssl_str = ini_file
-                    .get("bitcoin", "ssl")
-                    .unwrap_or(format!("{}", default_config.rpc_ssl));
-
-                let rpc_ssl = rpc_ssl_str == "1" || rpc_ssl_str == "true";
-
-                // [blockstack]
-                let blockstack_magic_str =
-                    ini_file.get("blockstack", "network_id").unwrap_or(format!(
-                        "{}{}",
-                        BLOCKSTACK_MAGIC_MAINNET.as_bytes()[0] as char,
-                        BLOCKSTACK_MAGIC_MAINNET.as_bytes()[1] as char
-                    ));
-
-                if blockstack_magic_str.len() != 2 {
-                    return Err(btc_error::ConfigError(
-                        "Invalid blockstack:network_id value: must be two bytes".to_string(),
-                    ));
-                }
-
-                let blockstack_magic = MagicBytes([
-                    blockstack_magic_str.as_bytes()[0] as u8,
-                    blockstack_magic_str.as_bytes()[1] as u8,
-                ]);
-
-                let cfg = BitcoinIndexerConfig {
-                    peer_host: peer_host,
-                    peer_port: peer_port,
-                    rpc_port: rpc_port,
-                    rpc_ssl: rpc_ssl,
-                    username: username,
-                    password: password,
-                    timeout: timeout,
-                    spv_headers_path: spv_headers_path,
-                    first_block: first_block,
-                    magic_bytes: blockstack_magic,
-                };
-
-                Ok(cfg)
-            }
-            Err(_) => Err(btc_error::ConfigError(
-                "Failed to parse BitcoinConfigIndexer config file".to_string(),
-            )),
-        }
-    }
 }
 
 impl BitcoinIndexerRuntime {
@@ -321,18 +160,6 @@ impl BitcoinIndexer {
             config: config,
             runtime: runtime,
         }
-    }
-
-    pub fn from_file(
-        network_id: BitcoinNetworkType,
-        config_file: &String,
-    ) -> Result<BitcoinIndexer, btc_error> {
-        let config = BitcoinIndexerConfig::from_file(config_file)?;
-        let runtime = BitcoinIndexerRuntime::new(network_id);
-        Ok(BitcoinIndexer {
-            config: config,
-            runtime: runtime,
-        })
     }
 
     pub fn dup(&self) -> BitcoinIndexer {
@@ -496,6 +323,11 @@ impl BitcoinIndexer {
                 }
                 Err(btc_error::ConnectionBroken) => {
                     do_handshake = true;
+                }
+                Err(btc_error::SerializationError(
+                    btc_serialization_err::UnrecognizedNetworkCommand(s),
+                )) => {
+                    debug!("Received unrecognized network command while receiving a message: {}, ignoring", s);
                 }
                 Err(e) => {
                     warn!("Unhandled error while receiving a message: {:?}", e);
@@ -769,57 +601,6 @@ impl Drop for BitcoinIndexer {
 
 impl BurnchainIndexer for BitcoinIndexer {
     type P = BitcoinBlockParser;
-
-    /// Instantiate the Bitcoin indexer, and connect to the peer network.
-    /// Instead, load our configuration state and sanity-check it.
-    ///
-    /// Pass a directory (working_dir) that contains a "bitcoin.ini" file.
-    fn init(
-        working_dir: &String,
-        network_name: &String,
-        first_block_height: u64,
-    ) -> Result<BitcoinIndexer, burnchain_error> {
-        let conf_path_str =
-            Burnchain::get_chainstate_config_path(working_dir, &"bitcoin".to_string());
-
-        let network_id_opt = match network_name.as_ref() {
-            BITCOIN_MAINNET_NAME => Some(BitcoinNetworkType::Mainnet),
-            BITCOIN_TESTNET_NAME => Some(BitcoinNetworkType::Testnet),
-            BITCOIN_REGTEST_NAME => Some(BitcoinNetworkType::Regtest),
-            _ => None,
-        };
-
-        if network_id_opt.is_none() {
-            return Err(burnchain_error::Bitcoin(btc_error::ConfigError(format!(
-                "Unrecognized network name '{}'",
-                network_name
-            ))));
-        }
-        let bitcoin_network_id = network_id_opt.unwrap();
-
-        if !PathBuf::from(&conf_path_str).exists() {
-            let default_config = BitcoinIndexerConfig::default(first_block_height);
-            default_config
-                .to_file(&conf_path_str)
-                .map_err(burnchain_error::Bitcoin)?;
-        }
-
-        let mut indexer = BitcoinIndexer::from_file(bitcoin_network_id, &conf_path_str)
-            .map_err(burnchain_error::Bitcoin)?;
-
-        SpvClient::new(
-            &indexer.config.spv_headers_path,
-            0,
-            None,
-            indexer.runtime.network_id,
-            true,
-            false,
-        )
-        .map_err(burnchain_error::Bitcoin)?;
-
-        indexer.connect()?;
-        Ok(indexer)
-    }
 
     /// Connect to the Bitcoin peer network.
     /// Use the peer host and peer port given in the config file,

@@ -559,7 +559,7 @@ impl SpvClient {
 
     /// Write a run of continuous headers to a particular location.
     /// Does _not_ check for continuity!
-    fn write_block_headers(
+    pub fn write_block_headers(
         &mut self,
         height: u64,
         headers: Vec<LoneBlockHeader>,

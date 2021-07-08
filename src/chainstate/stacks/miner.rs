@@ -1536,7 +1536,7 @@ pub mod test {
     use rand::Rng;
 
     use address::*;
-    use burnchains::test::*;
+    use burnchains::tests::*;
     use burnchains::*;
     use chainstate::burn::db::sortdb::*;
     use chainstate::burn::operations::{

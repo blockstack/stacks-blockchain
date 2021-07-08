@@ -211,13 +211,14 @@ impl<'a> DefinitionSorter {
                                     return Ok(());
                                 }
                             }
-                        } else if let Some(native_function) =
-                            // NOTE: can use ClarityVersion::latest() here only as long as NO NEW FUNCTIONS are special cased
-                            //        in the definition sorter.
+                        }
+                        // NOTE: can use ClarityVersion::latest() here only as long as NO NEW FUNCTIONS are special cased
+                        // in the definition sorter.
+                        else if let Some(native_function) =
                             NativeFunctions::lookup_by_name_at_version(
-                                    function_name,
-                                    &ClarityVersion::latest(),
-                                )
+                                function_name,
+                                &ClarityVersion::latest(),
+                            )
                         {
                             match native_function {
                                 NativeFunctions::ContractCall => {

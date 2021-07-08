@@ -113,6 +113,24 @@ impl PoxId {
     pub fn num_inventory_reward_cycles(&self) -> usize {
         self.0.len().saturating_sub(1)
     }
+
+    pub fn has_prefix(&self, prefix: &PoxId) -> bool {
+        if self.len() < prefix.len() {
+            return false;
+        }
+
+        for i in 0..prefix.len() {
+            if self.0[i] != prefix.0[i] {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn into_inner(self) -> Vec<bool> {
+        self.0
+    }
 }
 
 impl fmt::Display for PoxId {

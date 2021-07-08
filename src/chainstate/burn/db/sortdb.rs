@@ -111,6 +111,12 @@ impl FromRow<SortitionId> for SortitionId {
     }
 }
 
+impl FromRow<ConsensusHash> for ConsensusHash {
+    fn from_row<'a>(row: &'a Row) -> Result<ConsensusHash, db_error> {
+        ConsensusHash::from_column(row, "consensus_hash")
+    }
+}
+
 impl FromRow<MissedBlockCommit> for MissedBlockCommit {
     fn from_row<'a>(row: &'a Row) -> Result<MissedBlockCommit, db_error> {
         let intended_sortition = SortitionId::from_column(row, "intended_sortition_id")?;
@@ -483,6 +489,8 @@ const SORTITION_DB_INITIAL_SCHEMA: &'static [&'static str] = &[
     "CREATE INDEX snapshots_block_winning_hash ON snapshots(winning_stacks_block_hash);",
     "CREATE INDEX block_arrivals ON snapshots(arrival_index,burn_header_hash);",
     "CREATE INDEX arrival_indexes ON snapshots(arrival_index);",
+    "CREATE INDEX stacks_block_acceptance ON snapshots(stacks_block_accepted);",
+    "CREATE INDEX stacks_block_height ON snapshots(stacks_block_height);",
     r#"
     CREATE TABLE snapshot_transition_ops(
       sortition_id TEXT PRIMARY KEY,
@@ -1780,7 +1788,7 @@ impl<'a> SortitionHandleConn<'a> {
         let prepare_end_sortid =
             self.get_sortition_id_for_bhh(prepare_end_bhh)?
                 .ok_or_else(|| {
-                    warn!("Missing parent"; "burn_header_hash" => %prepare_end_bhh);
+                    warn!("Missing parent"; "burn_header_hash" => %prepare_end_bhh, "sortition_tip" => %&self.context.chain_tip);
                     BurnchainError::MissingParentBlock
                 })?;
         let block_height = SortitionDB::get_block_height(self.deref(), &prepare_end_sortid)?
@@ -2243,6 +2251,30 @@ impl SortitionDB {
         let qry = "SELECT * FROM snapshots ORDER BY block_height ASC";
         query_rows(self.conn(), qry, NO_PARAMS)
     }
+
+    pub fn get_all_snapshots_for_burn_block(
+        conn: &DBConn,
+        bhh: &BurnchainHeaderHash,
+    ) -> Result<Vec<BlockSnapshot>, db_error> {
+        let qry = "SELECT * FROM snapshots WHERE burn_header_hash = ?1";
+        query_rows(conn, qry, &[bhh])
+    }
+
+    /// Get the height of a consensus hash, even if it's not on the canonical PoX fork.
+    pub fn get_consensus_hash_height(&self, ch: &ConsensusHash) -> Result<Option<u64>, db_error> {
+        let qry = "SELECT block_height FROM snapshots WHERE consensus_hash = ?1";
+        let mut heights: Vec<u64> = query_rows(self.conn(), qry, &[ch])?;
+        if let Some(height) = heights.pop() {
+            for next_height in heights {
+                if height != next_height {
+                    panic!("BUG: consensus hash {} has two different heights", ch);
+                }
+            }
+            Ok(Some(height))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl<'a> SortitionDBConn<'a> {
@@ -2348,25 +2380,42 @@ impl<'a> SortitionDBConn<'a> {
         Ok(ret)
     }
 
-    /// Get the height of a burnchain block
-    pub fn inner_get_burn_block_height(
+    pub fn find_parent_snapshot_for_stacks_block(
         &self,
-        burn_header_hash: &BurnchainHeaderHash,
-    ) -> Result<Option<u64>, db_error> {
-        let qry = "SELECT block_height FROM snapshots WHERE burn_header_hash = ?1 LIMIT 1";
-        query_row(self.conn(), qry, &[burn_header_hash])
-    }
+        consensus_hash: &ConsensusHash,
+        block_hash: &BlockHeaderHash,
+    ) -> Result<Option<BlockSnapshot>, db_error> {
+        let db_handle = SortitionHandleConn::open_reader_consensus(self, consensus_hash)?;
+        let parent_block_snapshot = match db_handle
+            .get_block_snapshot_of_parent_stacks_block(consensus_hash, &block_hash)
+        {
+            Ok(Some((_, sn))) => {
+                debug!(
+                    "Parent of {}/{} is {}/{}",
+                    consensus_hash, block_hash, sn.consensus_hash, sn.winning_stacks_block_hash
+                );
+                sn
+            }
+            Ok(None) => {
+                debug!(
+                    "Received block with unknown parent snapshot: {}/{}",
+                    consensus_hash, block_hash,
+                );
+                return Ok(None);
+            }
+            Err(db_error::InvalidPoxSortition) => {
+                warn!(
+                    "Received block {}/{} on a non-canonical PoX sortition",
+                    consensus_hash, block_hash,
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
 
-    /// Get the burnchain hash given a height
-    pub fn inner_get_burn_header_hash(
-        &self,
-        height: u32,
-    ) -> Result<Option<BurnchainHeaderHash>, db_error> {
-        let tip = SortitionDB::get_canonical_burn_chain_tip(self.conn())?;
-        let ancestor_opt =
-            SortitionDB::get_ancestor_snapshot(&self, height as u64, &tip.sortition_id)?
-                .map(|snapshot| snapshot.burn_header_hash);
-        Ok(ancestor_opt)
+        Ok(Some(parent_block_snapshot))
     }
 }
 
@@ -2427,28 +2476,51 @@ impl SortitionDB {
         .flatten()
     }
 
-    pub fn invalidate_descendants_of(
+    pub fn revalidate_snapshot(
+        tx: &SortitionDBTx,
+        sortition_id: &SortitionId,
+    ) -> Result<(), BurnchainError> {
+        tx.tx().execute(
+            "UPDATE snapshots SET pox_valid = 1 WHERE sortition_id = ?1",
+            &[sortition_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn invalidate_descendants_with_closure<F>(
         &mut self,
         burn_block: &BurnchainHeaderHash,
-    ) -> Result<(), BurnchainError> {
+        mut cls: F,
+    ) -> Result<(), BurnchainError>
+    where
+        F: FnMut(&SortitionDBTx, &BurnchainHeaderHash, &Vec<BurnchainHeaderHash>) -> (),
+    {
         let db_tx = self.tx_begin()?;
         let mut queue = vec![burn_block.clone()];
 
         while let Some(header) = queue.pop() {
-            db_tx.tx().execute(
-                "UPDATE snapshots SET pox_valid = 0 WHERE parent_burn_header_hash = ?",
-                &[&header],
-            )?;
             let mut stmt = db_tx.prepare(
                 "SELECT DISTINCT burn_header_hash FROM snapshots WHERE parent_burn_header_hash = ?",
             )?;
             for next_header in stmt.query_map(&[&header], |row| row.get(0))? {
                 queue.push(next_header?);
             }
+            cls(&db_tx, &header, &queue);
+            db_tx.tx().execute(
+                "UPDATE snapshots SET pox_valid = 0 WHERE parent_burn_header_hash = ?",
+                &[&header],
+            )?;
         }
 
         db_tx.commit()?;
         Ok(())
+    }
+
+    pub fn invalidate_descendants_of(
+        &mut self,
+        burn_block: &BurnchainHeaderHash,
+    ) -> Result<(), BurnchainError> {
+        self.invalidate_descendants_with_closure(burn_block, |_tx, _bhh, _queue| {})
     }
 
     /// Get the last sortition in the prepare phase that chose a particular Stacks block as the anchor,
@@ -3031,6 +3103,8 @@ impl SortitionDB {
         query_rows(conn, qry, args)
     }
 
+    /// Get the vtxindex of the winning sortition.
+    /// The sortition may not be valid.
     pub fn get_block_winning_vtxindex(
         conn: &Connection,
         sortition: &SortitionId,
@@ -3286,6 +3360,19 @@ impl SortitionDB {
             &u64_to_sql(burn_block_height)?,
         ];
         query_row(conn, sql, args)
+    }
+
+    /// Get all sortition IDs at the given burnchain block height (including ones that aren't on
+    /// the canonical PoX fork)
+    pub fn get_sortition_ids_at_height(
+        conn: &DBConn,
+        height: u64,
+    ) -> Result<Vec<SortitionId>, db_error> {
+        query_rows(
+            conn,
+            "SELECT sortition_id FROM snapshots WHERE block_height = ?1",
+            &[&u64_to_sql(height)?],
+        )
     }
 }
 

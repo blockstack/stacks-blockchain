@@ -495,49 +495,19 @@ impl Relayer {
         block: &StacksBlock,
         download_time: u64,
     ) -> Result<bool, chainstate_error> {
-        // find the snapshot of the parent of this block
-        let db_handle = SortitionHandleConn::open_reader_consensus(sort_ic, consensus_hash)?;
-        let parent_block_snapshot = match db_handle
-            .get_block_snapshot_of_parent_stacks_block(consensus_hash, &block.block_hash())
+        if let Some(parent_block_snapshot) =
+            sort_ic.find_parent_snapshot_for_stacks_block(consensus_hash, &block.block_hash())?
         {
-            Ok(Some((_, sn))) => {
-                debug!(
-                    "Parent of {}/{} is {}/{}",
-                    consensus_hash,
-                    block.block_hash(),
-                    sn.consensus_hash,
-                    sn.winning_stacks_block_hash
-                );
-                sn
-            }
-            Ok(None) => {
-                debug!(
-                    "Received block with unknown parent snapshot: {}/{}",
-                    consensus_hash,
-                    &block.block_hash()
-                );
-                return Ok(false);
-            }
-            Err(db_error::InvalidPoxSortition) => {
-                warn!(
-                    "Received block {}/{} on a non-canonical PoX sortition",
-                    consensus_hash,
-                    &block.block_hash()
-                );
-                return Ok(false);
-            }
-            Err(e) => {
-                return Err(e.into());
-            }
-        };
-
-        chainstate.preprocess_anchored_block(
-            sort_ic,
-            consensus_hash,
-            block,
-            &parent_block_snapshot.consensus_hash,
-            download_time,
-        )
+            chainstate.preprocess_anchored_block(
+                sort_ic,
+                consensus_hash,
+                block,
+                &parent_block_snapshot.consensus_hash,
+                download_time,
+            )
+        } else {
+            Ok(false)
+        }
     }
 
     /// Coalesce a set of microblocks into relayer hints and MicroblocksData messages, as calculated by

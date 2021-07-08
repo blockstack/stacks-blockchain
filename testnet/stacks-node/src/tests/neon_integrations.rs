@@ -1222,9 +1222,8 @@ fn bitcoind_resubmission_test() {
     .unwrap();
 
     let burn_tip = burnchain_db.get_canonical_chain_tip().unwrap();
-    let last_burn_block = burnchain_db
-        .get_burnchain_block(&burn_tip.block_hash)
-        .unwrap();
+    let last_burn_block =
+        BurnchainDB::get_burnchain_block(burnchain_db.conn(), &burn_tip.block_hash).unwrap();
 
     assert_eq!(
         last_burn_block.ops.len(),

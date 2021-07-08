@@ -324,10 +324,9 @@ impl BitcoinRegtestController {
     }
 
     fn receive_blocks_helium(&mut self) -> BurnchainTip {
-        let (mut burnchain, mut burnchain_indexer) = self.setup_indexer_runtime();
-
         let (block_snapshot, state_transition) = loop {
-            match burnchain.sync_with_indexer_deprecated(&mut burnchain_indexer) {
+            let (mut burnchain, burnchain_indexer) = self.setup_indexer_runtime();
+            match burnchain.sync_with_indexer_deprecated(burnchain_indexer) {
                 Ok(x) => {
                     break x;
                 }
@@ -397,13 +396,14 @@ impl BitcoinRegtestController {
             }
         };
 
-        let (mut burnchain, mut burnchain_indexer) = self.setup_indexer_runtime();
         let (block_snapshot, burnchain_height, state_transition) = loop {
             if !self.should_keep_running() {
                 return Err(BurnchainControllerError::CoordinatorClosed);
             }
+
+            let (mut burnchain, burnchain_indexer) = self.setup_indexer_runtime();
             match burnchain.sync_with_indexer(
-                &mut burnchain_indexer,
+                burnchain_indexer,
                 coordinator_comms.clone(),
                 target_block_height_opt,
                 Some(burnchain.pox_constants.reward_cycle_length as u64),
@@ -431,6 +431,7 @@ impl BitcoinRegtestController {
                         .expect("Sortition DB error.")
                         .expect("BUG: no data for the canonical chain tip");
 
+                    let (_, burnchain_indexer) = self.setup_indexer_runtime();
                     let burnchain_height = burnchain_indexer
                         .get_highest_header_height()
                         .map_err(BurnchainControllerError::IndexerError)?;
@@ -1053,9 +1054,12 @@ impl BitcoinRegtestController {
                 break;
             }
 
-            let parent = burnchain_db
-                .get_burnchain_block(&burn_chain_tip.parent_block_hash)
-                .ok()?;
+            let parent = BurnchainDB::get_burnchain_block(
+                &burnchain_db.conn(),
+                &burn_chain_tip.parent_block_hash,
+            )
+            .ok()?;
+
             burn_chain_tip = parent.header;
             traversal_depth += 1;
         }

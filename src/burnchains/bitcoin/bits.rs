@@ -570,7 +570,17 @@ impl BurnchainHeaderHash {
     /// Instantiate a burnchain block hash from a Bitcoin block header
     pub fn from_bitcoin_hash(bitcoin_hash: &Sha256dHash) -> BurnchainHeaderHash {
         // NOTE: Sha256dhash is the same size as BurnchainHeaderHash, so this should never panic
+        // Bitcoin stores its hashes in big-endian form, but our codebase stores them in
+        // little-endian form (which is also how most libraries work).
         BurnchainHeaderHash::from_bytes_be(bitcoin_hash.as_bytes()).unwrap()
+    }
+
+    pub fn to_bitcoin_hash(&self) -> Sha256dHash {
+        let mut bytes = self.0.to_vec();
+        bytes.reverse();
+        let mut buf = [0u8; 32];
+        buf.copy_from_slice(&bytes[0..32]);
+        Sha256dHash(buf)
     }
 
     pub fn zero() -> BurnchainHeaderHash {

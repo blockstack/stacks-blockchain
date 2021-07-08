@@ -612,6 +612,7 @@ pub mod tests {
                     canonical_stacks_tip_height: 0,
                     canonical_stacks_tip_hash: BlockHeaderHash([0u8; 32]),
                     canonical_stacks_tip_consensus_hash: ConsensusHash([0u8; 20]),
+                    ..BlockSnapshot::initial(0, &first_burn_hash, 0)
                 };
                 let mut tx =
                     SortitionHandleTx::begin(&mut db, &prev_snapshot.sortition_id).unwrap();

@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::cmp;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::{
@@ -26,6 +27,11 @@ use std::sync::{
 use rusqlite::Connection;
 
 use address;
+use burnchains::affirmation::*;
+use burnchains::bitcoin::address::BitcoinAddress;
+use burnchains::bitcoin::indexer::BitcoinIndexer;
+use burnchains::bitcoin::BitcoinNetworkType;
+use burnchains::tests::db::*;
 use burnchains::{db::*, *};
 use chainstate;
 use chainstate::burn::db::sortdb::SortitionDB;
@@ -42,7 +48,7 @@ use clarity_vm::clarity::ClarityConnection;
 use core;
 use core::*;
 use monitoring::increment_stx_blocks_processed_counter;
-use util::hash::Hash160;
+use util::hash::{hex_bytes, Hash160};
 use util::vrf::*;
 use vm::{
     costs::{ExecutionCost, LimitedCostTracker},
@@ -58,10 +64,23 @@ use crate::types::chainstate::{
 use crate::types::proof::TrieHash;
 use crate::{types, util};
 
+use deps::bitcoin::blockdata::block::{BlockHeader, LoneBlockHeader};
+use deps::bitcoin::network::serialize::BitcoinHash;
+use deps::bitcoin::util::hash::Sha256dHash;
+
 lazy_static! {
-    static ref BURN_BLOCK_HEADERS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
-    static ref TXIDS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
-    static ref MBLOCK_PUBKHS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+    pub static ref BURN_BLOCK_HEADERS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+    pub static ref TXIDS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+    pub static ref MBLOCK_PUBKHS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+    pub static ref STACKS_BLOCK_HEADERS: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+}
+
+pub fn next_block_hash() -> BlockHeaderHash {
+    let cur = STACKS_BLOCK_HEADERS.fetch_add(1, Ordering::SeqCst);
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&cur.to_le_bytes());
+    bytes.extend_from_slice(&[0; 24]);
+    BlockHeaderHash::from_bytes(&bytes).unwrap()
 }
 
 pub fn next_burn_header_hash() -> BurnchainHeaderHash {
@@ -90,6 +109,7 @@ pub fn next_hash160() -> Hash160 {
 
 /// Produce a burn block, insert it into burnchain_db, and insert it into others as well
 pub fn produce_burn_block<'a, I: Iterator<Item = &'a mut BurnchainDB>>(
+    burnchain_conf: &Burnchain,
     burnchain_db: &mut BurnchainDB,
     par: &BurnchainHeaderHash,
     mut ops: Vec<BlockstackOperationType>,
@@ -97,14 +117,14 @@ pub fn produce_burn_block<'a, I: Iterator<Item = &'a mut BurnchainDB>>(
 ) -> BurnchainHeaderHash {
     let BurnchainBlockData {
         header: par_header, ..
-    } = burnchain_db.get_burnchain_block(par).unwrap();
+    } = BurnchainDB::get_burnchain_block(&burnchain_db.conn(), par).unwrap();
     assert_eq!(&par_header.block_hash, par);
     let block_height = par_header.block_height + 1;
     for op in ops.iter_mut() {
         op.set_block_height(block_height);
     }
 
-    produce_burn_block_do_not_set_height(burnchain_db, par, ops, others)
+    produce_burn_block_do_not_set_height(burnchain_conf, burnchain_db, par, ops, others)
 }
 
 fn get_burn_distribution(conn: &Connection, sortition: &SortitionId) -> Vec<BurnSamplePoint> {
@@ -120,6 +140,7 @@ fn get_burn_distribution(conn: &Connection, sortition: &SortitionId) -> Vec<Burn
 }
 
 fn produce_burn_block_do_not_set_height<'a, I: Iterator<Item = &'a mut BurnchainDB>>(
+    burnchain_conf: &Burnchain,
     burnchain_db: &mut BurnchainDB,
     par: &BurnchainHeaderHash,
     mut ops: Vec<BlockstackOperationType>,
@@ -127,12 +148,23 @@ fn produce_burn_block_do_not_set_height<'a, I: Iterator<Item = &'a mut Burnchain
 ) -> BurnchainHeaderHash {
     let BurnchainBlockData {
         header: par_header, ..
-    } = burnchain_db.get_burnchain_block(par).unwrap();
+    } = BurnchainDB::get_burnchain_block(&burnchain_db.conn(), par).unwrap();
     assert_eq!(&par_header.block_hash, par);
     let block_height = par_header.block_height + 1;
     let timestamp = par_header.timestamp + 1;
     let num_txs = ops.len() as u64;
-    let block_hash = next_burn_header_hash();
+
+    let bitcoin_header = BlockHeader {
+        bits: 0,
+        merkle_root: Sha256dHash([0u8; 32]),
+        nonce: 0,
+        prev_blockhash: par.to_bitcoin_hash(),
+        time: timestamp as u32,
+        version: 0x20000000,
+    };
+
+    let block_hash = BurnchainHeaderHash::from_bitcoin_hash(&bitcoin_header.bitcoin_hash());
+
     let header = BurnchainBlockHeader {
         block_height,
         timestamp,
@@ -141,18 +173,47 @@ fn produce_burn_block_do_not_set_height<'a, I: Iterator<Item = &'a mut Burnchain
         parent_block_hash: par.clone(),
     };
 
+    let mut indexer = BitcoinIndexer::new_unit_test(&burnchain_conf.working_dir);
+    indexer.raw_store_header(header.clone()).unwrap();
+
     for op in ops.iter_mut() {
         op.set_burn_header_hash(block_hash.clone());
     }
 
     burnchain_db
-        .raw_store_burnchain_block(header.clone(), ops.clone())
+        .raw_store_burnchain_block(burnchain_conf, &indexer, header.clone(), ops.clone())
         .unwrap();
+
+    let this_reward_cycle = burnchain_conf
+        .block_height_to_reward_cycle(block_height)
+        .unwrap_or(0);
+
+    let prev_reward_cycle = burnchain_conf
+        .block_height_to_reward_cycle(block_height.saturating_sub(1))
+        .unwrap_or(0);
+
+    if this_reward_cycle != prev_reward_cycle {
+        // at reward cycle boundary
+        test_debug!(
+            "Update PoX affirmation maps for reward cycle {} ({}) block {} cycle-length {}",
+            prev_reward_cycle,
+            this_reward_cycle,
+            block_height,
+            burnchain_conf.pox_constants.reward_cycle_length
+        );
+        update_pox_affirmation_maps(burnchain_db, &indexer, prev_reward_cycle, burnchain_conf)
+            .unwrap();
+    }
 
     for other in others {
         other
-            .raw_store_burnchain_block(header.clone(), ops.clone())
+            .raw_store_burnchain_block(burnchain_conf, &indexer, header.clone(), ops.clone())
             .unwrap();
+
+        if this_reward_cycle != prev_reward_cycle {
+            update_pox_affirmation_maps(other, &indexer, prev_reward_cycle, burnchain_conf)
+                .unwrap();
+        }
     }
 
     block_hash
@@ -176,30 +237,65 @@ pub fn setup_states(
     pox_consts: Option<PoxConstants>,
     initial_balances: Option<Vec<(PrincipalData, u64)>>,
 ) {
+    inner_setup_states(
+        paths,
+        vrf_keys,
+        committers,
+        pox_consts,
+        initial_balances,
+        StacksEpochId::Epoch20,
+    )
+}
+
+pub fn setup_states_2_1(
+    paths: &[&str],
+    vrf_keys: &[VRFPrivateKey],
+    committers: &[StacksPrivateKey],
+    pox_consts: Option<PoxConstants>,
+    initial_balances: Option<Vec<(PrincipalData, u64)>>,
+) {
+    inner_setup_states(
+        paths,
+        vrf_keys,
+        committers,
+        pox_consts,
+        initial_balances,
+        StacksEpochId::Epoch21,
+    )
+}
+
+fn inner_setup_states(
+    paths: &[&str],
+    vrf_keys: &[VRFPrivateKey],
+    committers: &[StacksPrivateKey],
+    pox_consts: Option<PoxConstants>,
+    initial_balances: Option<Vec<(PrincipalData, u64)>>,
+    start_epoch: StacksEpochId,
+) {
     let mut burn_block = None;
     let mut others = vec![];
 
     for path in paths.iter() {
         let burnchain = get_burnchain(path, pox_consts.clone());
 
+        let epochs = match start_epoch {
+            StacksEpochId::Epoch20 => StacksEpoch::unit_test(burnchain.first_block_height),
+            StacksEpochId::Epoch21 => StacksEpoch::unit_test_2_1(burnchain.first_block_height),
+            _ => panic!("Cannot start in epoch 1.0"),
+        };
+
         let sortition_db = SortitionDB::connect(
             &burnchain.get_db_path(),
             burnchain.first_block_height,
             &burnchain.first_block_hash,
             burnchain.first_block_timestamp.into(),
-            &StacksEpoch::unit_test(burnchain.first_block_height),
+            &epochs,
             true,
         )
         .unwrap();
 
-        let burnchain_blocks_db = BurnchainDB::connect(
-            &burnchain.get_burnchaindb_path(),
-            burnchain.first_block_height,
-            &burnchain.first_block_hash,
-            burnchain.first_block_timestamp as u64,
-            true,
-        )
-        .unwrap();
+        let burnchain_blocks_db =
+            BurnchainDB::connect(&burnchain.get_burnchaindb_path(), &burnchain, true).unwrap();
 
         if burn_block.is_none() {
             let first_sortition =
@@ -237,15 +333,18 @@ pub fn setup_states(
                 burnchain_blocks_db,
                 first_sortition.burn_header_hash,
                 registers,
+                path.clone(),
             ));
         } else {
             others.push(burnchain_blocks_db);
         }
     }
 
-    let (mut burnchain_blocks_db, burn_header_hash, registers) = burn_block.take().unwrap();
+    let (mut burnchain_blocks_db, burn_header_hash, registers, path) = burn_block.take().unwrap();
+    let burnchain = get_burnchain(path, pox_consts.clone());
 
     produce_burn_block(
+        &burnchain,
         &mut burnchain_blocks_db,
         &burn_header_hash,
         registers,
@@ -537,6 +636,36 @@ fn make_stacks_block(
     )
 }
 
+fn make_stacks_block_from_parent_sortition(
+    sort_db: &SortitionDB,
+    state: &mut StacksChainState,
+    burnchain: &Burnchain,
+    parent_block: &BlockHeaderHash,
+    parent_height: u64,
+    miner: &StacksPrivateKey,
+    my_burn: u64,
+    vrf_key: &VRFPrivateKey,
+    key_index: u32,
+    parent_sortition: BlockSnapshot,
+) -> (BlockstackOperationType, StacksBlock) {
+    make_stacks_block_with_input(
+        sort_db,
+        state,
+        burnchain,
+        parent_block,
+        parent_height,
+        miner,
+        my_burn,
+        vrf_key,
+        key_index,
+        None,
+        0,
+        false,
+        (Txid([0; 32]), 0),
+        Some(parent_sortition),
+    )
+}
+
 /// build a stacks block with just the coinbase off of
 ///  parent_block, in the canonical sortition fork of SortitionDB.
 /// parent_block _must_ be included in the StacksChainState
@@ -599,6 +728,7 @@ fn make_stacks_block_with_recipients_and_sunset_burn(
         sunset_burn,
         post_sunset_burn,
         (Txid([0; 32]), 0),
+        None,
     )
 }
 
@@ -619,6 +749,7 @@ fn make_stacks_block_with_input(
     sunset_burn: u64,
     post_sunset_burn: bool,
     input: (Txid, u32),
+    parents_sortition_opt: Option<BlockSnapshot>,
 ) -> (BlockstackOperationType, StacksBlock) {
     let tx_auth = TransactionAuth::from_p2pkh(miner).unwrap();
 
@@ -635,23 +766,28 @@ fn make_stacks_block_with_input(
     let coinbase_op = tx_signer.get_tx().unwrap();
 
     let sortition_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
-    let parents_sortition = SortitionDB::get_block_snapshot_for_winning_stacks_block(
-        &sort_db.index_conn(),
-        &sortition_tip.sortition_id,
-        parent_block,
-    )
-    .unwrap()
-    .unwrap();
+    let parents_sortition = if let Some(sn) = parents_sortition_opt {
+        sn
+    } else {
+        SortitionDB::get_block_snapshot_for_winning_stacks_block(
+            &sort_db.index_conn(),
+            &sortition_tip.sortition_id,
+            parent_block,
+        )
+        .unwrap()
+        .unwrap()
+    };
+
+    eprintln!(
+        "Find parents stacks header: {} in sortition {} (height {}, parent {}/{},{}, index block hash {})",
+        &parent_block, &parents_sortition.sortition_id, parents_sortition.block_height, &parents_sortition.consensus_hash, parent_block, parent_height, &StacksBlockHeader::make_index_block_hash(&parents_sortition.consensus_hash, &parent_block)
+    );
 
     let parent_vtxindex =
         SortitionDB::get_block_winning_vtxindex(sort_db.conn(), &parents_sortition.sortition_id)
             .unwrap()
             .unwrap();
 
-    eprintln!(
-        "Find parents stacks header: {} in sortition {}",
-        &parent_block, &parents_sortition.sortition_id
-    );
     let parent_stacks_header = StacksChainState::get_anchored_block_header_info(
         state.db(),
         &parents_sortition.consensus_hash,
@@ -659,6 +795,9 @@ fn make_stacks_block_with_input(
     )
     .unwrap()
     .unwrap();
+
+    eprintln!("Build off of {:?}", &parent_stacks_header);
+
     let proof = VRF::prove(vrf_key, sortition_tip.sortition_hash.as_bytes());
 
     let total_burn = parents_sortition.total_burn;
@@ -751,7 +890,7 @@ fn missed_block_commits() {
         Some(initial_balances),
     );
 
-    let mut coord = make_coordinator(path, Some(burnchain_conf));
+    let mut coord = make_coordinator(path, Some(burnchain_conf.clone()));
 
     coord.handle_new_burnchain_block().unwrap();
 
@@ -819,6 +958,7 @@ fn missed_block_commits() {
                 0,
                 false,
                 last_input.as_ref().unwrap().clone(),
+                None,
             );
             // NOTE: intended for block block_height - 2
             last_input = Some((
@@ -871,6 +1011,7 @@ fn missed_block_commits() {
                 0,
                 false,
                 last_input.as_ref().unwrap().clone(),
+                None,
             )
         };
 
@@ -884,6 +1025,7 @@ fn missed_block_commits() {
         if ix % (MINING_COMMITMENT_WINDOW as usize) == 3 {
             // produce an empty block!
             produce_burn_block(
+                &burnchain_conf,
                 &mut burnchain,
                 &burnchain_tip.block_hash,
                 vec![],
@@ -900,6 +1042,7 @@ fn missed_block_commits() {
                 },
             ));
             produce_burn_block_do_not_set_height(
+                &burnchain_conf,
                 &mut burnchain,
                 &burnchain_tip.block_hash,
                 ops,
@@ -1096,6 +1239,7 @@ fn test_simple_setup() {
         };
 
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             vec![op],
@@ -1412,6 +1556,7 @@ fn test_sortition_with_reward_set() {
 
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             ops,
@@ -1645,6 +1790,7 @@ fn test_sortition_with_burner_reward_set() {
 
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             ops,
@@ -1897,6 +2043,7 @@ fn test_pox_btc_ops() {
 
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             ops,
@@ -2194,6 +2341,7 @@ fn test_stx_transfer_btc_ops() {
 
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             ops,
@@ -2290,7 +2438,7 @@ fn test_initial_coinbase_reward_distributions() {
         Some(initial_balances),
     );
 
-    let mut coord = make_coordinator(path, Some(burnchain_conf));
+    let mut coord = make_coordinator(path, Some(burnchain_conf.clone()));
 
     coord.handle_new_burnchain_block().unwrap();
 
@@ -2316,6 +2464,7 @@ fn test_initial_coinbase_reward_distributions() {
         let mut burnchain = get_burnchain_db(path, pox_consts.clone());
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &burnchain_conf,
             &mut burnchain,
             &burnchain_tip.block_hash,
             vec![],
@@ -2355,6 +2504,7 @@ fn test_initial_coinbase_reward_distributions() {
         eprintln!("BURNCHAIN TIP HEIGHT = {}", burnchain_tip.block_height);
         if ix % 2 == 1 {
             produce_burn_block(
+                &burnchain_conf,
                 &mut burnchain,
                 &burnchain_tip.block_hash,
                 vec![],
@@ -2404,6 +2554,7 @@ fn test_initial_coinbase_reward_distributions() {
 
             let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
             produce_burn_block(
+                &b,
                 &mut burnchain,
                 &burnchain_tip.block_hash,
                 ops,
@@ -2684,6 +2835,7 @@ fn test_sortition_with_sunset() {
 
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             ops,
@@ -2755,10 +2907,6 @@ fn test_sortition_with_sunset() {
 }
 
 #[test]
-// This test should panic until the MARF stability issue
-// https://github.com/blockstack/stacks-blockchain/issues/1805
-// is resolved:
-#[should_panic]
 /// Test a block that is processable in 2 PoX forks:
 ///   block "11" should be processable in both `111` and `110`
 ///   (because its parent is block `0`, and nobody stacks in
@@ -2771,18 +2919,36 @@ fn test_pox_processable_block_in_different_pox_forks() {
     let _r = std::fs::remove_dir_all(path);
     let _r = std::fs::remove_dir_all(path_blinded);
 
-    let vrf_keys: Vec<_> = (0..12).map(|_| VRFPrivateKey::new()).collect();
-    let committers: Vec<_> = (0..12).map(|_| StacksPrivateKey::new()).collect();
+    let pox_consts = Some(PoxConstants::new(
+        5,
+        2,
+        2,
+        25,
+        5,
+        u64::max_value(),
+        u64::max_value(),
+    ));
+    let b = get_burnchain(path, pox_consts.clone());
+    let b_blind = get_burnchain(path_blinded, pox_consts.clone());
 
-    setup_states(&[path, path_blinded], &vrf_keys, &committers, None, None);
+    let vrf_keys: Vec<_> = (0..20).map(|_| VRFPrivateKey::new()).collect();
+    let committers: Vec<_> = (0..20).map(|_| StacksPrivateKey::new()).collect();
 
-    let mut coord = make_coordinator(path, None);
-    let mut coord_blind = make_coordinator(path_blinded, None);
+    setup_states_2_1(
+        &[path, path_blinded],
+        &vrf_keys,
+        &committers,
+        pox_consts.clone(),
+        None,
+    );
+
+    let mut coord = make_coordinator(path, Some(b));
+    let mut coord_blind = make_coordinator(path_blinded, Some(b_blind));
 
     coord.handle_new_burnchain_block().unwrap();
     coord_blind.handle_new_burnchain_block().unwrap();
 
-    let sort_db = get_sortition_db(path, None);
+    let sort_db = get_sortition_db(path, pox_consts.clone());
 
     let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
     assert_eq!(tip.block_height, 1);
@@ -2792,7 +2958,7 @@ fn test_pox_processable_block_in_different_pox_forks() {
         .unwrap()
         .unwrap();
 
-    let sort_db_blind = get_sortition_db(path_blinded, None);
+    let sort_db_blind = get_sortition_db(path_blinded, pox_consts.clone());
 
     let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
     assert_eq!(tip.block_height, 1);
@@ -2806,24 +2972,25 @@ fn test_pox_processable_block_in_different_pox_forks() {
     assert_eq!(ops.accepted_ops.len(), vrf_keys.len());
     assert_eq!(ops.consumed_leader_keys.len(), 0);
 
-    // at first, sortition_ids shouldn't have diverged
-    //  but once the first reward cycle begins, they should diverge.
-    let mut sortition_ids_diverged = false;
     // process sequential blocks, and their sortitions...
     let mut stacks_blocks: Vec<(SortitionId, StacksBlock)> = vec![];
-    let mut anchor_blocks = vec![];
 
     // setup:
-    //   0 - 1 - 2 - 3 - 4 - 5 - 6 - 7 - 8 - 9
-    //    \_ 10 _ 11
-    //  blocks `10` and `11` can be processed either
-    //    in PoX fork 111 or in 110
+    // sort:1                   6                   11                      16                       21
+    //      |----- rc 0 --------|------ rc 1 -------|----- rc 2 ------------|-------- rc 3 ----------|----- rc 4
+    // ix:  X - 0 - 1 - 2 - 3 - 4 - 5 - 6 - 7 - 8 - 9
+    //           \_____________________________________ 10 _ 11 _ 12 _ 13 _ 14 _ 15 _ 16 _ 17 _ 18 _ 19
+    //
+    //
     for (ix, (vrf_key, miner)) in vrf_keys.iter().zip(committers.iter()).enumerate() {
-        let mut burnchain = get_burnchain_db(path, None);
+        let mut burnchain = get_burnchain_db(path, pox_consts.clone());
+        let burnchain_blind = get_burnchain_db(path_blinded, pox_consts.clone());
         let mut chainstate = get_chainstate(path);
+        let mut chainstate_blind = get_chainstate(path_blinded);
         let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
-        let burnchain_blinded = get_burnchain_db(path_blinded, None);
-        let b = get_burnchain(path, None);
+        let burnchain_tip_blind = burnchain_blind.get_canonical_chain_tip().unwrap();
+        let b = get_burnchain(path, pox_consts.clone());
+        let b_blind = get_burnchain(path_blinded, pox_consts.clone());
 
         eprintln!("Making block {}", ix);
         let (op, block) = if ix == 0 {
@@ -2842,169 +3009,1101 @@ fn test_pox_processable_block_in_different_pox_forks() {
             } else {
                 stacks_blocks[ix - 1].1.header.block_hash()
             };
-            make_stacks_block(
+            if ix < 10 {
+                make_stacks_block(
+                    &sort_db,
+                    &mut chainstate,
+                    &b,
+                    &parent,
+                    burnchain_tip.block_height,
+                    miner,
+                    10000,
+                    vrf_key,
+                    ix as u32,
+                )
+            } else {
+                make_stacks_block(
+                    &sort_db_blind,
+                    &mut chainstate_blind,
+                    &b_blind,
+                    &parent,
+                    burnchain_tip_blind.block_height,
+                    miner,
+                    10000,
+                    vrf_key,
+                    ix as u32,
+                )
+            }
+        };
+        produce_burn_block(
+            &b,
+            &mut burnchain,
+            &burnchain_tip.block_hash,
+            vec![op],
+            [burnchain_blind].iter_mut(),
+        );
+
+        // handle the sortition -- if
+        loop {
+            let missing_anchor_opt = coord.handle_new_burnchain_block().unwrap();
+            if let Some(missing_anchor) = missing_anchor_opt {
+                eprintln!(
+                    "Unblinded database reports missing anchor block {:?} (ix={})",
+                    &missing_anchor, ix
+                );
+                for (_, blk) in stacks_blocks.iter() {
+                    if blk.block_hash() == missing_anchor {
+                        let ic = sort_db.index_conn();
+                        let tip =
+                            SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+                        let sn = SortitionDB::get_block_snapshot_for_winning_stacks_block(
+                            &ic,
+                            &tip.sortition_id,
+                            &blk.block_hash(),
+                        )
+                        .unwrap()
+                        .unwrap();
+
+                        // feed this missing reward cycle data
+                        let rc = b_blind
+                            .block_height_to_reward_cycle(sn.block_height)
+                            .unwrap();
+                        let start_height = b_blind.reward_cycle_to_block_height(rc);
+                        for height in start_height..sn.block_height {
+                            let asn =
+                                SortitionDB::get_ancestor_snapshot(&ic, height, &tip.sortition_id)
+                                    .unwrap()
+                                    .unwrap();
+                            for (_, blk) in stacks_blocks.iter() {
+                                if blk.block_hash() == asn.winning_stacks_block_hash {
+                                    eprintln!("Unblinded database accepts missing anchor block ancestor {} of {} (ix={})", &blk.block_hash(), &missing_anchor, ix);
+                                    preprocess_block(&mut chainstate, &sort_db, &asn, blk.clone());
+                                    coord.handle_new_stacks_block().unwrap();
+                                    break;
+                                }
+                            }
+                        }
+
+                        // *now* process this anchor block
+                        eprintln!(
+                            "Unblinded database processes missing anchor block {} (ix={})",
+                            &missing_anchor, ix
+                        );
+                        preprocess_block(&mut chainstate, &sort_db, &sn, blk.clone());
+                        coord.handle_new_stacks_block().unwrap();
+                        break;
+                    }
+                }
+            } else {
+                coord.handle_new_stacks_block().unwrap();
+                break;
+            }
+        }
+
+        coord_blind.handle_new_burnchain_block().unwrap();
+        coord_blind.handle_new_stacks_block().unwrap();
+
+        let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+        let blinded_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+
+        if ix < 10 {
+            // load the block into staging and process it on the un-blinded sortition DB
+            let block_hash = block.header.block_hash();
+            eprintln!(
+                "Block hash={}, parent={}, height={}, ix={} (not blind)",
+                &block_hash, &block.header.parent_block, block.header.total_work.work, ix
+            );
+
+            assert_eq!(&tip.winning_stacks_block_hash, &block_hash);
+            stacks_blocks.push((tip.sortition_id.clone(), block.clone()));
+
+            preprocess_block(&mut chainstate, &sort_db, &tip, block.clone());
+
+            // handle the stacks block
+            coord.handle_new_stacks_block().unwrap();
+        }
+        if ix == 0 || ix >= 10 {
+            // load the block into staging and process it on the blinded sortition DB
+            let block_hash = block.header.block_hash();
+            eprintln!(
+                "Block hash={}, parent={}, height={}, ix={} (blind)",
+                &block_hash, &block.header.parent_block, block.header.total_work.work, ix
+            );
+
+            assert_eq!(&blinded_tip.winning_stacks_block_hash, &block_hash);
+            if ix != 0 {
+                stacks_blocks.push((blinded_tip.sortition_id.clone(), block.clone()));
+            }
+
+            preprocess_block(&mut chainstate_blind, &sort_db_blind, &blinded_tip, block);
+
+            // handle the stacks block
+            coord_blind.handle_new_stacks_block().unwrap();
+        }
+        if ix == 18 {
+            // right at the end of reward cycle 3 -- feed in the blocks from the blinded DB into
+            // the unblinded DB
+            for (i, (_, block)) in stacks_blocks.iter().enumerate() {
+                if i >= 10 && i <= ix {
+                    eprintln!("Mirror blocks from blinded DB to unblinded DB (simulates downloading them) i={}", i);
+                    let ic = sort_db_blind.index_conn();
+                    let sn = SortitionDB::get_block_snapshot_for_winning_stacks_block(
+                        &ic,
+                        &tip.sortition_id,
+                        &block.block_hash(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                    preprocess_block(&mut chainstate, &sort_db, &sn, block.clone());
+                    let _ = coord.handle_new_stacks_block();
+                }
+            }
+        }
+        if ix > 18 {
+            // starting in reward cycle 4 -- this should NOT panic
+            eprintln!("Mirror block {} to unblinded DB", ix);
+            preprocess_block(&mut chainstate, &sort_db, &tip, stacks_blocks[ix].1.clone());
+            let _ = coord.handle_new_stacks_block();
+        }
+    }
+
+    // both the blinded and unblined chains should now have the same view
+    let block_height = eval_at_chain_tip(path, &sort_db, "block-height");
+    assert_eq!(block_height, Value::UInt(11));
+
+    let block_height = eval_at_chain_tip(path_blinded, &sort_db_blind, "block-height");
+    assert_eq!(block_height, Value::UInt(11));
+
+    // because of the affirmations, the canonical PoX ID deliberately omits anchor blocks
+    {
+        let ic = sort_db_blind.index_handle_at_tip();
+        let pox_id = ic.get_pox_id().unwrap();
+        assert_eq!(&pox_id.to_string(), "110011");
+    }
+    {
+        let ic = sort_db.index_handle_at_tip();
+        let pox_id = ic.get_pox_id().unwrap();
+        assert_eq!(&pox_id.to_string(), "110011");
+    }
+
+    // same canonical Stacks chain tip
+    let stacks_tip = SortitionDB::get_canonical_stacks_chain_tip_hash(sort_db.conn()).unwrap();
+    let stacks_tip_blind =
+        SortitionDB::get_canonical_stacks_chain_tip_hash(sort_db_blind.conn()).unwrap();
+    assert_eq!(stacks_tip, stacks_tip_blind);
+
+    // same final consensus hash, at the start of height 20
+    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+    let blinded_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+
+    assert!(tip.sortition);
+    assert!(blinded_tip.sortition);
+    assert_eq!(
+        tip.winning_stacks_block_hash,
+        blinded_tip.winning_stacks_block_hash
+    );
+    assert_eq!(tip.burn_header_hash, blinded_tip.burn_header_hash);
+    assert_eq!(tip.consensus_hash, blinded_tip.consensus_hash);
+    assert_eq!(tip.block_height, 21);
+    assert_eq!(blinded_tip.block_height, 21);
+}
+
+fn highest_block(sortitions: &HashMap<u64, BlockSnapshot>) -> BlockSnapshot {
+    let mut max_k = 0;
+    for (k, _) in sortitions.iter() {
+        if *k > max_k {
+            max_k = *k;
+        }
+    }
+    sortitions.get(&max_k).clone().unwrap().to_owned()
+}
+
+fn replay_reward_cycle<'a>(
+    stacks_blocks: &Vec<(SortitionId, StacksBlock, u64)>,
+    b: &Burnchain,
+    coord: &mut ChainsCoordinator<'a, NullEventDispatcher, (), OnChainRewardSetProvider>,
+    sort_db: &SortitionDB,
+    chainstate: &mut StacksChainState,
+) {
+    for _ in 0..b.pox_constants.reward_cycle_length {
+        let missing_anchor_opt = coord.handle_new_burnchain_block().unwrap();
+        if let Some(missing_anchor) = missing_anchor_opt {
+            eprintln!(
+                "Database {} reports missing anchor block {:?}",
+                &b.working_dir, &missing_anchor
+            );
+            for (_, blk, ..) in stacks_blocks.iter() {
+                if blk.block_hash() == missing_anchor {
+                    let ic = sort_db.index_conn();
+                    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+                    let sn = SortitionDB::get_block_snapshot_for_winning_stacks_block(
+                        &ic,
+                        &tip.sortition_id,
+                        &blk.block_hash(),
+                    )
+                    .unwrap()
+                    .unwrap();
+
+                    // feed this missing reward cycle data
+                    let rc = b.block_height_to_reward_cycle(sn.block_height).unwrap();
+                    for height in 0..sn.block_height {
+                        let asn =
+                            SortitionDB::get_ancestor_snapshot(&ic, height, &tip.sortition_id)
+                                .unwrap()
+                                .unwrap();
+                        for (_, blk, ..) in stacks_blocks.iter() {
+                            if blk.block_hash() == asn.winning_stacks_block_hash {
+                                eprintln!(
+                                    "Database {} accepts missing anchor block ancestor {} of {}",
+                                    &b.working_dir,
+                                    &blk.block_hash(),
+                                    &missing_anchor
+                                );
+                                preprocess_block(chainstate, sort_db, &asn, blk.clone());
+                                coord.handle_new_stacks_block().unwrap();
+                                break;
+                            }
+                        }
+                    }
+
+                    // *now* process this anchor block
+                    eprintln!(
+                        "Database {} processes missing anchor block {}",
+                        &b.working_dir, &missing_anchor
+                    );
+                    preprocess_block(chainstate, sort_db, &sn, blk.clone());
+                    coord.handle_new_stacks_block().unwrap();
+                    break;
+                }
+            }
+        } else {
+            coord.handle_new_stacks_block().unwrap();
+            break;
+        }
+    }
+}
+
+fn load_sortitions(sort_db: &SortitionDB) -> HashMap<u64, BlockSnapshot> {
+    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+    let ic = sort_db.index_conn();
+    let mut ret = HashMap::new();
+    for height in 0..(tip.block_height + 1) {
+        if let Some(sn) =
+            SortitionDB::get_ancestor_snapshot(&ic, height, &tip.sortition_id).unwrap()
+        {
+            ret.insert(sn.block_height, sn);
+        }
+    }
+    ret
+}
+
+#[test]
+fn test_pox_affirmation_fork_duel() {
+    let path = "/tmp/stacks-blockchain.test.pox_affirmation_fork_duel";
+    // setup a second set of states that won't see the broadcasted blocks
+    let path_blinded = "/tmp/stacks-blockchain.test.pox_affirmation_fork_duel.blinded";
+    let _r = std::fs::remove_dir_all(path);
+    let _r = std::fs::remove_dir_all(path_blinded);
+
+    let pox_consts = Some(PoxConstants::new(
+        5,
+        2,
+        2,
+        25,
+        5,
+        u64::max_value(),
+        u64::max_value(),
+    ));
+    let b = get_burnchain(path, pox_consts.clone());
+    let b_blind = get_burnchain(path_blinded, pox_consts.clone());
+
+    let vrf_keys: Vec<_> = (0..29).map(|_| VRFPrivateKey::new()).collect();
+    let committers: Vec<_> = (0..29).map(|_| StacksPrivateKey::new()).collect();
+
+    setup_states_2_1(
+        &[path, path_blinded],
+        &vrf_keys,
+        &committers,
+        pox_consts.clone(),
+        None,
+    );
+
+    let mut coord = make_coordinator(path, Some(b));
+    let mut coord_blind = make_coordinator(path_blinded, Some(b_blind));
+
+    coord.handle_new_burnchain_block().unwrap();
+    coord_blind.handle_new_burnchain_block().unwrap();
+
+    let sort_db = get_sortition_db(path, pox_consts.clone());
+
+    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+    assert_eq!(tip.block_height, 1);
+    assert_eq!(tip.sortition, false);
+    let (_, ops) = sort_db
+        .get_sortition_result(&tip.sortition_id)
+        .unwrap()
+        .unwrap();
+
+    let sort_db_blind = get_sortition_db(path_blinded, pox_consts.clone());
+
+    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+    assert_eq!(tip.block_height, 1);
+    assert_eq!(tip.sortition, false);
+    let (_, ops) = sort_db_blind
+        .get_sortition_result(&tip.sortition_id)
+        .unwrap()
+        .unwrap();
+
+    // we should have all the VRF registrations accepted
+    assert_eq!(ops.accepted_ops.len(), vrf_keys.len());
+    assert_eq!(ops.consumed_leader_keys.len(), 0);
+
+    // process sequential blocks, and their sortitions, and burn block heights
+    let mut stacks_blocks: Vec<(SortitionId, StacksBlock, u64)> = vec![];
+
+    let mut snapshots: HashMap<u64, BlockSnapshot> = HashMap::new();
+    let mut snapshots_blind: HashMap<u64, BlockSnapshot> = HashMap::new();
+
+    let mut fork_num = 0;
+    let mut fork_start = 0;
+    let mut sortition_fork_start = 0;
+
+    // setup (sortitions block height, with Stacks blocks):
+    //
+    // not blind: 2 - 3 - 4 ------------------- 10 - 11 - 12 - 13 - 14 - 15 ------------------------ 21 - 22 - 23 - 24 - 25
+    // blind:      \________ 5 _ 6 _ 7 _ 8 _ 9 _____________________________ 16 _ 17 _ 18 _ 19 _ 20 ________________________ 26 _ 27 _ 28 _ 29
+    //
+    for (ix, (vrf_key, miner)) in vrf_keys.iter().zip(committers.iter()).enumerate() {
+        let mut burnchain = get_burnchain_db(path, pox_consts.clone());
+        let burnchain_blind = get_burnchain_db(path_blinded, pox_consts.clone());
+        let mut chainstate = get_chainstate(path);
+        let mut chainstate_blind = get_chainstate(path_blinded);
+        let burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
+        let burnchain_tip_blind = burnchain_blind.get_canonical_chain_tip().unwrap();
+        let b = get_burnchain(path, pox_consts.clone());
+        let b_blind = get_burnchain(path_blinded, pox_consts.clone());
+
+        let prev_reward_cycle = b
+            .block_height_to_reward_cycle(burnchain_tip.block_height.saturating_sub(1))
+            .unwrap_or(0);
+        let cur_reward_cycle = b
+            .block_height_to_reward_cycle(burnchain_tip.block_height)
+            .unwrap_or(0);
+        let next_reward_cycle = b
+            .block_height_to_reward_cycle(burnchain_tip.block_height + 1)
+            .unwrap_or(0);
+        let will_rc_start = cur_reward_cycle != next_reward_cycle;
+
+        let burn_block = burnchain_tip.block_height;
+
+        let (op, block) = if ix == 0 {
+            make_genesis_block(
                 &sort_db,
                 &mut chainstate,
-                &b,
-                &parent,
-                burnchain_tip.block_height,
+                &BlockHeaderHash([0; 32]),
                 miner,
                 10000,
                 vrf_key,
                 ix as u32,
             )
+        } else {
+            let (parent, parent_sortition) = if burn_block == 5 {
+                fork_num += 1;
+                fork_start = stacks_blocks.len() - 1;
+                sortition_fork_start = highest_block(&snapshots).block_height;
+                let p = stacks_blocks[0].1.header.block_hash();
+                eprintln!("snapshots = {:?}", &snapshots);
+                (p, snapshots.get(&2).unwrap().clone())
+            } else if burn_block == 10 {
+                fork_num += 1;
+                let p = stacks_blocks[fork_start - 1].1.header.block_hash();
+                let sn = snapshots_blind
+                    .get(&(sortition_fork_start - 1))
+                    .unwrap()
+                    .clone();
+                fork_start = stacks_blocks.len() - 2;
+                sortition_fork_start = highest_block(&snapshots_blind).block_height;
+                (p, sn)
+            } else if burn_block == 16 || burn_block == 21 || burn_block == 26 {
+                fork_num += 1;
+                let p = stacks_blocks[fork_start].1.header.block_hash();
+                let parent_burn_height = if burn_block == 16 { 9 } else { burn_block - 6 };
+
+                let sn = if fork_num % 2 == 1 {
+                    let sn = snapshots_blind.get(&parent_burn_height).unwrap().clone();
+                    sn
+                } else {
+                    let sn = snapshots.get(&parent_burn_height).unwrap().clone();
+                    sn
+                };
+
+                fork_start = stacks_blocks.len() - 2;
+                (p, sn)
+            } else {
+                let p = stacks_blocks[ix - 1].1.header.block_hash();
+                let sn = if fork_num % 2 == 1 {
+                    highest_block(&snapshots_blind)
+                } else {
+                    highest_block(&snapshots)
+                };
+                (p, sn)
+            };
+
+            if fork_num % 2 == 0 {
+                eprintln!("Making block {} off {} burn block {} parent {} {}, prev rc = {}, cur rc = {}, next rc = {}, will_rc_start? {} fork_num = {}, fork_start = {}, (not blind)",
+                          ix, &parent, burn_block, parent_sortition.block_height, &parent_sortition.consensus_hash, prev_reward_cycle, cur_reward_cycle, next_reward_cycle, will_rc_start, fork_num, fork_start);
+                make_stacks_block_from_parent_sortition(
+                    &sort_db,
+                    &mut chainstate,
+                    &b,
+                    &parent,
+                    parent_sortition.block_height,
+                    miner,
+                    10000,
+                    vrf_key,
+                    ix as u32,
+                    parent_sortition,
+                )
+            } else {
+                eprintln!("Making block {} off {} burn block {} parent {} {}, prev rc = {}, cur rc = {}, next rc = {}, will_rc_start? {}, fork_num = {}, fork_start = {} (blind)",
+                          ix, &parent, burn_block, parent_sortition.block_height, &parent_sortition.consensus_hash, prev_reward_cycle, cur_reward_cycle, next_reward_cycle, will_rc_start, fork_num, fork_start);
+                make_stacks_block_from_parent_sortition(
+                    &sort_db_blind,
+                    &mut chainstate_blind,
+                    &b_blind,
+                    &parent,
+                    parent_sortition.block_height,
+                    miner,
+                    10000,
+                    vrf_key,
+                    ix as u32,
+                    parent_sortition,
+                )
+            }
         };
+
+        eprintln!("Made block {} {}, burn block {}, prev rc = {}, cur rc = {}, next rc = {}, will_rc_start? {}", ix, block.block_hash(), burnchain_tip.block_height, prev_reward_cycle, cur_reward_cycle, next_reward_cycle, will_rc_start);
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             vec![op],
-            [burnchain_blinded].iter_mut(),
+            [burnchain_blind].iter_mut(),
         );
-        // handle the sortition
-        coord.handle_new_burnchain_block().unwrap();
-        coord_blind.handle_new_burnchain_block().unwrap();
 
-        let new_burnchain_tip = burnchain.get_canonical_chain_tip().unwrap();
-        if b.is_reward_cycle_start(new_burnchain_tip.block_height) {
-            eprintln!(
-                "Reward cycle start at height={}",
-                new_burnchain_tip.block_height
+        if burn_block == 14 {
+            // blinded DB has NOT undergone a PoX reorg yet -- it believes that the anchor blocks for
+            // reward cycles 1 and 2 have valid snapshots, but it's simply missing the anchor block
+            // for rc 1.
+            let burnchain_blind = get_burnchain_db(path_blinded, pox_consts.clone());
+
+            let (rc1_bc, rc1_bc_md) =
+                BurnchainDB::get_anchor_block_commit(burnchain_blind.conn(), 1)
+                    .unwrap()
+                    .unwrap();
+            let (rc2_bc, rc2_bc_md) =
+                BurnchainDB::get_anchor_block_commit(burnchain_blind.conn(), 2)
+                    .unwrap()
+                    .unwrap();
+
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            let ic = sort_db_blind.index_conn();
+            let handle = ic.as_handle(&tip_blind.sortition_id);
+
+            let rc1_sn_before = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc2_sn_before = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert!(rc1_sn_before.pox_valid);
+            assert!(rc2_sn_before.pox_valid);
+
+            eprintln!("Handle new burnchain block {} (not blind)", burn_block);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+
+            eprintln!("Handle new burnchain block {} (blind)", burn_block);
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
             );
-            // the "blinded" sortition db and the one that's processed all the blocks
-            //   should have diverged in sortition_ids now...
-            sortition_ids_diverged = true;
-            // store the anchor block for this sortition for later checking
-            let ic = sort_db.index_handle_at_tip();
-            let bhh = ic.get_last_anchor_block_hash().unwrap().unwrap();
-            eprintln!(
-                "Anchor block={}, selected at height={}",
-                &bhh,
-                SortitionDB::get_block_snapshot_for_winning_stacks_block(
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+
+            // PoX reorg has happened -- the blinded DB learned about the anchor block for rc2
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+
+            test_debug!("Blind and unblind chain tips should match");
+            assert_eq!(tip.block_height, tip_blind.block_height);
+            assert_eq!(tip.consensus_hash, tip_blind.consensus_hash);
+
+            // anchor blocks still on the same consensus history
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            let ic = sort_db_blind.index_conn();
+            let handle = ic.as_handle(&tip_blind.sortition_id);
+
+            let rc1_sn = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc2_sn = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+
+            assert!(rc1_sn_before.pox_valid);
+            assert!(rc2_sn_before.pox_valid);
+
+            assert_eq!(rc1_sn_before.consensus_hash, rc1_sn.consensus_hash);
+            assert_ne!(rc2_sn_before.consensus_hash, rc2_sn.consensus_hash); // different
+
+            let rc2_sn_invalid = SortitionDB::get_block_snapshot_consensus(
+                sort_db_blind.conn(),
+                &rc2_sn_before.consensus_hash,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(rc2_sn_invalid.consensus_hash, rc2_sn_before.consensus_hash);
+            assert!(!rc2_sn_invalid.pox_valid);
+
+            // blinded DB's affirmation map is consistent with unblinded DB
+            let heaviest_am = coord_blind.get_canonical_affirmation_map().unwrap();
+            assert_eq!(heaviest_am, AffirmationMap::decode("paa").unwrap());
+        } else if burn_block == 15 {
+            // in order to keep mining on the blinded chainstate, then we'll need to make it so
+            // the blinded DB wants to confirm the anchor block for rc 2.  But, it no longer believes
+            // that rc 2's anchor block is canonical. We need to override this and force it to re-process.
+            let mut burnchain_blind = get_burnchain_db(path_blinded, pox_consts.clone());
+
+            let (rc1_bc, rc1_bc_md) =
+                BurnchainDB::get_anchor_block_commit(burnchain_blind.conn(), 1)
+                    .unwrap()
+                    .unwrap();
+            let (rc2_bc, rc2_bc_md) =
+                BurnchainDB::get_anchor_block_commit(burnchain_blind.conn(), 2)
+                    .unwrap()
+                    .unwrap();
+            let (rc3_bc, rc3_bc_md) =
+                BurnchainDB::get_anchor_block_commit(burnchain_blind.conn(), 3)
+                    .unwrap()
+                    .unwrap();
+
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            let ic = sort_db_blind.index_conn();
+            let handle = ic.as_handle(&tip_blind.sortition_id);
+
+            let rc1_sn_before = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc2_sn_before = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc3_sn_before = handle
+                .get_block_snapshot(&rc3_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+
+            // force the DB to "revert" back to assuming
+            let tx = burnchain_blind.tx_begin().unwrap();
+            tx.set_override_affirmation_map(1, AffirmationMap::decode("").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(2, AffirmationMap::decode("a").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(3, AffirmationMap::decode("ap").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(4, AffirmationMap::decode("apa").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(5, AffirmationMap::decode("apap").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(6, AffirmationMap::decode("apapa").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(7, AffirmationMap::decode("apapap").unwrap())
+                .unwrap();
+            tx.commit().unwrap();
+
+            eprintln!("Replay rc 0 for blinded db");
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+            eprintln!("Replay rc 1 for blinded db");
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+            eprintln!("Replay rc 2 for blinded db");
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+
+            snapshots_blind = load_sortitions(&sort_db_blind);
+
+            // blinded DB has undergone a PoX reorg that "reverts" it -- it now believes that rc2's
+            // anchor block exists, but not rc1's or rc3's.
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            let ic = sort_db_blind.index_conn();
+            let handle = ic.as_handle(&tip_blind.sortition_id);
+
+            test_debug!(
+                "Test anchor block-commit for rc1 {} in {}",
+                &rc1_bc.block_header_hash,
+                &rc1_bc_md.burn_block_hash
+            );
+            let rc1_sn = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_eq!(rc1_sn.consensus_hash, rc1_sn_before.consensus_hash);
+
+            test_debug!(
+                "Test anchor block-commit for rc2 {} in {}",
+                &rc2_bc.block_header_hash,
+                &rc2_bc_md.burn_block_hash
+            );
+            let rc2_sn = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_ne!(rc2_sn.consensus_hash, rc2_sn_before.consensus_hash);
+
+            test_debug!(
+                "Test anchor block-commit for rc3 {} in {}",
+                &rc3_bc.block_header_hash,
+                &rc3_bc_md.burn_block_hash
+            );
+            let rc3_sn = handle
+                .get_block_snapshot(&rc3_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_ne!(rc3_sn.consensus_hash, rc3_sn_before.consensus_hash);
+
+            // old rc2 anchor block consensus hash isn't valid anymore
+            let rc2_sn_invalid = SortitionDB::get_block_snapshot_consensus(
+                sort_db_blind.conn(),
+                &rc2_sn_before.consensus_hash,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!rc2_sn_invalid.pox_valid);
+
+            // blinded DB's affirmation map is consistent with its original history
+            let heaviest_am = coord_blind.get_canonical_affirmation_map().unwrap();
+            assert_eq!(heaviest_am, AffirmationMap::decode("apa").unwrap());
+        } else if burn_block == 19 {
+            // merge both chains' views
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+
+            assert_ne!(tip.consensus_hash, tip_blind.consensus_hash);
+
+            eprintln!("Handle new burnchain block {} (not blind)", burn_block);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+
+            eprintln!("Handle new burnchain block {} (blind)", burn_block);
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+            replay_reward_cycle(
+                &stacks_blocks,
+                &b_blind,
+                &mut coord_blind,
+                &sort_db_blind,
+                &mut chainstate_blind,
+            );
+
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            let tip_blind =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+            assert_eq!(tip.consensus_hash, tip_blind.consensus_hash);
+
+            // the unblinded DB's affirmation map is consistent with the blinded DB's history
+            let heaviest_am = coord.get_canonical_affirmation_map().unwrap();
+            assert_eq!(heaviest_am, AffirmationMap::decode("apaa").unwrap());
+        } else if burn_block == 20 {
+            // the unblinded DB wants to confirm the anchor block for rc 1, but it no longer believes
+            // that rc 1 is canonical. We need to override this and force it to re-process.
+            let mut burnchain = get_burnchain_db(path, pox_consts.clone());
+
+            let (rc1_bc, rc1_bc_md) = BurnchainDB::get_anchor_block_commit(burnchain.conn(), 1)
+                .unwrap()
+                .unwrap();
+            let (rc2_bc, rc2_bc_md) = BurnchainDB::get_anchor_block_commit(burnchain.conn(), 2)
+                .unwrap()
+                .unwrap();
+            let (rc3_bc, rc3_bc_md) = BurnchainDB::get_anchor_block_commit(burnchain.conn(), 3)
+                .unwrap()
+                .unwrap();
+            let (rc4_bc, rc4_bc_md) = BurnchainDB::get_anchor_block_commit(burnchain.conn(), 4)
+                .unwrap()
+                .unwrap();
+
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            let ic = sort_db.index_conn();
+            let handle = ic.as_handle(&tip.sortition_id);
+
+            let rc1_sn_before = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc2_sn_before = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc3_sn_before = handle
+                .get_block_snapshot(&rc3_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            let rc4_sn_before = handle
+                .get_block_snapshot(&rc4_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+
+            let tx = burnchain.tx_begin().unwrap();
+            tx.set_override_affirmation_map(1, AffirmationMap::decode("").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(2, AffirmationMap::decode("p").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(3, AffirmationMap::decode("pa").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(4, AffirmationMap::decode("pap").unwrap())
+                .unwrap();
+            tx.set_override_affirmation_map(5, AffirmationMap::decode("papa").unwrap())
+                .unwrap();
+            tx.commit().unwrap();
+
+            eprintln!("Replay rc 0 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 1 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 2 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 3 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 4 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+
+            snapshots = load_sortitions(&sort_db);
+
+            // unblinded DB has undergone a PoX reorg that "reverts" it -- it now believes that rc1's
+            // anchor block exists as well as rc3's, but not rc2's or rc4's.
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            let ic = sort_db.index_conn();
+            let handle = ic.as_handle(&tip.sortition_id);
+
+            test_debug!(
+                "Test anchor block-commit for rc1 {} in {}",
+                &rc1_bc.block_header_hash,
+                &rc1_bc_md.burn_block_hash
+            );
+            let rc1_sn = handle
+                .get_block_snapshot(&rc1_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_eq!(rc1_sn.consensus_hash, rc1_sn_before.consensus_hash);
+
+            test_debug!(
+                "Test anchor block-commit for rc2 {} in {}",
+                &rc2_bc.block_header_hash,
+                &rc2_bc_md.burn_block_hash
+            );
+            let rc2_sn = handle
+                .get_block_snapshot(&rc2_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_ne!(rc2_sn.consensus_hash, rc2_sn_before.consensus_hash);
+
+            test_debug!(
+                "Test anchor block-commit for rc3 {} in {}",
+                &rc3_bc.block_header_hash,
+                &rc3_bc_md.burn_block_hash
+            );
+            let rc3_sn = handle
+                .get_block_snapshot(&rc3_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_ne!(rc3_sn.consensus_hash, rc3_sn_before.consensus_hash);
+
+            test_debug!(
+                "Test anchor block-commit for rc4 {} in {}",
+                &rc4_bc.block_header_hash,
+                &rc4_bc_md.burn_block_hash
+            );
+            let rc4_sn = handle
+                .get_block_snapshot(&rc4_bc_md.burn_block_hash)
+                .unwrap()
+                .unwrap();
+            assert_ne!(rc4_sn.consensus_hash, rc4_sn_before.consensus_hash);
+
+            // old rc2 anchor block consensus hash isn't valid anymore
+            let rc2_sn_invalid = SortitionDB::get_block_snapshot_consensus(
+                sort_db.conn(),
+                &rc2_sn_before.consensus_hash,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!rc2_sn_invalid.pox_valid);
+
+            // old rc4 anchor block consensus hash isn't valid anymore
+            let rc4_sn_invalid = SortitionDB::get_block_snapshot_consensus(
+                sort_db.conn(),
+                &rc4_sn_before.consensus_hash,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!rc4_sn_invalid.pox_valid);
+
+            // blinded DB's affirmation map is consistent with its original history
+            let heaviest_am = coord.get_canonical_affirmation_map().unwrap();
+            assert_eq!(heaviest_am, AffirmationMap::decode("papa").unwrap());
+        } else if burn_block == 29 {
+            let tx = burnchain.tx_begin().unwrap();
+            tx.clear_override_affirmation_map(1).unwrap();
+            tx.clear_override_affirmation_map(2).unwrap();
+            tx.clear_override_affirmation_map(3).unwrap();
+            tx.clear_override_affirmation_map(4).unwrap();
+            tx.clear_override_affirmation_map(5).unwrap();
+            tx.clear_override_affirmation_map(6).unwrap();
+            tx.clear_override_affirmation_map(7).unwrap();
+            tx.commit().unwrap();
+
+            // unblinded chain syncs with blinded chain
+            eprintln!("Handle new burnchain block {} (not blind)", burn_block);
+
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 0 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 1 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 2 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 3 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 4 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 5 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+            eprintln!("Replay rc 6 for unblinded db");
+            replay_reward_cycle(&stacks_blocks, &b, &mut coord, &sort_db, &mut chainstate);
+
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            for burn_height in (burn_block - 10)..burn_block {
+                let ancestor = SortitionDB::get_ancestor_snapshot(
                     &sort_db.index_conn(),
-                    &ic.context.chain_tip,
-                    &bhh
+                    burn_height,
+                    &tip.sortition_id,
                 )
                 .unwrap()
-                .unwrap()
-                .block_height
-            );
-            anchor_blocks.push(bhh);
+                .unwrap();
+                for (_, blk, bh) in stacks_blocks.iter() {
+                    if ancestor.sortition
+                        && ancestor.winning_stacks_block_hash == blk.block_hash()
+                        && *bh == burn_height
+                    {
+                        eprintln!(
+                            "Replay {} from {} (not blind)",
+                            burn_height,
+                            &blk.block_hash()
+                        );
+                        preprocess_block(&mut chainstate, &sort_db, &ancestor, blk.clone());
+                        coord.handle_new_stacks_block().unwrap();
+                    }
+                }
+            }
+
+            let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+            let blinded_tip =
+                SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+
+            let tip_at_29 =
+                SortitionDB::get_ancestor_snapshot(&sort_db.index_conn(), 29, &tip.sortition_id)
+                    .unwrap()
+                    .unwrap();
+            let blinded_tip_at_29 = SortitionDB::get_ancestor_snapshot(
+                &sort_db_blind.index_conn(),
+                29,
+                &blinded_tip.sortition_id,
+            )
+            .unwrap()
+            .unwrap();
+
+            assert_eq!(tip_at_29.consensus_hash, blinded_tip_at_29.consensus_hash);
+        } else {
+            eprintln!("Handle new burnchain block {} (not blind)", burn_block);
+            for _ in 0..(2 * b.pox_constants.reward_cycle_length + 1) {
+                coord.handle_new_burnchain_block().unwrap();
+                coord.handle_new_stacks_block().unwrap();
+            }
+
+            eprintln!("Handle new burnchain block {} (blind)", burn_block);
+            for _ in 0..(2 * b.pox_constants.reward_cycle_length + 1) {
+                coord_blind.handle_new_burnchain_block().unwrap();
+                coord_blind.handle_new_stacks_block().unwrap();
+            }
         }
 
         let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
         let blinded_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
-        if sortition_ids_diverged {
-            assert_ne!(
-                tip.sortition_id, blinded_tip.sortition_id,
-                "Sortitions should have diverged by block height = {}",
-                blinded_tip.block_height
-            );
-        } else {
-            assert_eq!(
-                tip.sortition_id, blinded_tip.sortition_id,
-                "Sortitions should not have diverged at block height = {}",
-                blinded_tip.block_height
-            );
+
+        snapshots.insert(tip.block_height, tip.clone());
+        snapshots_blind.insert(blinded_tip.block_height, blinded_tip.clone());
+
+        if fork_num % 2 == 0 {
+            // load the block into staging and process it on the un-blinded sortition DB
+            let block_hash = block.header.block_hash();
+            eprintln!("Block hash={}, parent={}, height={}, burn_block={}, sortition_tip={}, ix={} (not blind)", &block_hash, &block.header.parent_block, block.header.total_work.work, burn_block, &tip.sortition_id, ix);
+
+            stacks_blocks.push((tip.sortition_id.clone(), block.clone(), tip.block_height));
+
+            if tip.winning_stacks_block_hash == block_hash {
+                eprintln!("Preprocess {} (not blind)", &block_hash);
+                preprocess_block(&mut chainstate, &sort_db, &tip, block.clone());
+            } else {
+                eprintln!("Will NOT preprocess {} (not blind)", &block_hash);
+            }
+
+            // handle the stacks block
+            coord.handle_new_stacks_block().unwrap();
         }
+        if ix == 0 || (fork_num % 2) == 1 {
+            // load the block into staging and process it on the blinded sortition DB
+            let block_hash = block.header.block_hash();
+            eprintln!("Block hash={}, parent={}, height={}, burn_block={}, sortition_tip={}, ix={} (blind)", &block_hash, &block.header.parent_block, block.header.total_work.work, burn_block, &blinded_tip.sortition_id, ix);
 
-        // load the block into staging
-        let block_hash = block.header.block_hash();
-        eprintln!("Block hash={}, ix={}", &block_hash, ix);
+            if ix != 0 {
+                stacks_blocks.push((
+                    blinded_tip.sortition_id.clone(),
+                    block.clone(),
+                    blinded_tip.block_height,
+                ));
+            }
 
-        assert_eq!(&tip.winning_stacks_block_hash, &block_hash);
-        stacks_blocks.push((tip.sortition_id.clone(), block.clone()));
+            if blinded_tip.winning_stacks_block_hash == block_hash {
+                eprintln!("Preprocess {} (blind)", &block_hash);
+                preprocess_block(&mut chainstate_blind, &sort_db_blind, &blinded_tip, block);
+            } else {
+                eprintln!("Will NOT preprocess {} (blind)", &block_hash);
+            }
 
-        preprocess_block(&mut chainstate, &sort_db, &tip, block);
-
-        // handle the stacks block
-        coord.handle_new_stacks_block().unwrap();
+            // handle the stacks block
+            coord_blind.handle_new_stacks_block().unwrap();
+        }
     }
 
+    // unblinded chain goes to burn block 30; blinded chain goes to burn block 29.
+    // But, they share the same history.
+    let tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn()).unwrap();
+    let blinded_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db_blind.conn()).unwrap();
+
+    assert_eq!(tip.block_height, 30);
+    assert_eq!(blinded_tip.block_height, 29);
+
+    let tip_29 = SortitionDB::get_ancestor_snapshot(
+        &sort_db.index_conn(),
+        blinded_tip.block_height,
+        &tip.sortition_id,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        tip_29.winning_stacks_block_hash,
+        blinded_tip.winning_stacks_block_hash
+    );
+    assert_eq!(tip_29.burn_header_hash, blinded_tip.burn_header_hash);
+    assert_eq!(tip_29.consensus_hash, blinded_tip.consensus_hash);
+
+    let heaviest_am = coord.get_canonical_affirmation_map().unwrap();
+    assert_eq!(heaviest_am, AffirmationMap::decode("apapap").unwrap());
+
     let block_height = eval_at_chain_tip(path, &sort_db, "block-height");
-    assert_eq!(block_height, Value::UInt(10));
+    assert_eq!(block_height, Value::UInt(11));
 
-    let block_height = eval_at_chain_tip(path_blinded, &sort_db_blind, "block-height");
-    assert_eq!(block_height, Value::UInt(0));
+    // the blinded burnchain DB is doing just fine -- it even has the next Stacks block!
+    let heaviest_am = coord_blind.get_canonical_affirmation_map().unwrap();
+    assert_eq!(heaviest_am, AffirmationMap::decode("apapap").unwrap());
 
+    let block_height_blind = eval_at_chain_tip(path_blinded, &sort_db_blind, "block-height");
+    assert_eq!(block_height_blind, Value::UInt(12));
+
+    let stacks_tip = SortitionDB::get_canonical_stacks_chain_tip_hash(sort_db.conn()).unwrap();
+    let stacks_tip_blind =
+        SortitionDB::get_canonical_stacks_chain_tip_hash(sort_db_blind.conn()).unwrap();
+    let stacks_tip_blind_11 = {
+        let mut chainstate = get_chainstate(path_blinded);
+        let mut tx = chainstate.index_tx_begin().unwrap();
+        let hdr = StacksChainState::get_index_tip_ancestor(
+            &mut tx,
+            &StacksBlockHeader::make_index_block_hash(&stacks_tip_blind.0, &stacks_tip_blind.1),
+            block_height.expect_u128() as u64,
+        )
+        .unwrap()
+        .unwrap();
+        (hdr.consensus_hash, hdr.anchored_header.block_hash())
+    };
+
+    assert_eq!(stacks_tip, stacks_tip_blind_11);
+
+    // because of the affirmations, the canonical PoX ID deliberately omits anchor blocks
+    {
+        let ic = sort_db_blind.index_handle_at_tip();
+        let pox_id = ic.get_pox_id().unwrap();
+        assert_eq!(&pox_id.to_string(), "1101010");
+    }
     {
         let ic = sort_db.index_handle_at_tip();
         let pox_id = ic.get_pox_id().unwrap();
-        assert_eq!(&pox_id.to_string(), "111");
+        assert_eq!(&pox_id.to_string(), "1101010");
     }
-
-    {
-        let ic = sort_db_blind.index_handle_at_tip();
-        let pox_id = ic.get_pox_id().unwrap();
-        assert_eq!(&pox_id.to_string(), "100");
-    }
-
-    // now, we reveal `0` to the blinded coordinator
-
-    reveal_block(
-        path_blinded,
-        &sort_db_blind,
-        &mut coord_blind,
-        &stacks_blocks[0].0,
-        &stacks_blocks[0].1,
-    );
-
-    // after revealing ``0``, we should now have the anchor block for
-    //   the first reward cycle after the initial one
-
-    {
-        let ic = sort_db_blind.index_handle_at_tip();
-        let pox_id = ic.get_pox_id().unwrap();
-        assert_eq!(&pox_id.to_string(), "110");
-    }
-
-    // now, the blinded node should be able to process blocks 10 and 11
-    //   10 will process fine, because its parent has consensus hash =
-    //       INITIAL_CONSENSUS_HASH
-    //   11 will NOT process fine, even though it _should_, because its parents
-    //     consensus hash is different than the consensus hash of the parent when it was mined
-
-    let sort_id = SortitionDB::get_block_snapshot_for_winning_stacks_block(
-        &sort_db_blind.index_conn(),
-        &SortitionDB::get_canonical_sortition_tip(sort_db_blind.conn()).unwrap(),
-        &stacks_blocks[10].1.block_hash(),
-    )
-    .unwrap()
-    .unwrap()
-    .sortition_id;
-
-    reveal_block(
-        path_blinded,
-        &sort_db_blind,
-        &mut coord_blind,
-        &sort_id,
-        &stacks_blocks[10].1,
-    );
-
-    let block_height = eval_at_chain_tip(path_blinded, &sort_db_blind, "block-height");
-    assert_eq!(block_height, Value::UInt(2));
-    eprintln!("Processed block 10 okay!");
-
-    // won't successfully process the block
-    let sort_id = SortitionDB::get_block_snapshot_for_winning_stacks_block(
-        &sort_db_blind.index_conn(),
-        &SortitionDB::get_canonical_sortition_tip(sort_db_blind.conn()).unwrap(),
-        &stacks_blocks[11].1.block_hash(),
-    )
-    .unwrap()
-    .unwrap()
-    .sortition_id;
-
-    reveal_block(
-        path_blinded,
-        &sort_db_blind,
-        &mut coord_blind,
-        &sort_id,
-        &stacks_blocks[11].1,
-    );
-
-    let block_height = eval_at_chain_tip(path_blinded, &sort_db_blind, "block-height");
-    assert_eq!(block_height, Value::UInt(3));
-    eprintln!("Processed block 11 okay!");
 }
 
 #[test]
@@ -3100,6 +4199,7 @@ fn test_pox_no_anchor_selected() {
         };
 
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             vec![op],
@@ -3307,6 +4407,7 @@ fn test_pox_fork_out_of_order() {
             )
         };
         produce_burn_block(
+            &b,
             &mut burnchain,
             &burnchain_tip.block_hash,
             vec![op],
@@ -3551,6 +4652,11 @@ fn test_pox_fork_out_of_order() {
 
 fn eval_at_chain_tip(chainstate_path: &str, sort_db: &SortitionDB, eval: &str) -> Value {
     let stacks_tip = SortitionDB::get_canonical_stacks_chain_tip_hash(sort_db.conn()).unwrap();
+    test_debug!(
+        "Canonical chain tip at {} is {:?}",
+        chainstate_path,
+        &stacks_tip
+    );
     let mut chainstate = get_chainstate(chainstate_path);
     chainstate
         .with_read_only_clarity_tx(

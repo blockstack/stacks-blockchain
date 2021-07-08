@@ -1833,11 +1833,12 @@ pub mod test {
 
     use address::*;
     use burnchains::bitcoin::address::*;
+    use burnchains::bitcoin::indexer::BitcoinIndexer;
     use burnchains::bitcoin::keys::*;
     use burnchains::bitcoin::*;
     use burnchains::burnchain::*;
     use burnchains::db::BurnchainDB;
-    use burnchains::test::*;
+    use burnchains::tests::*;
     use burnchains::*;
     use chainstate::burn::db::sortdb;
     use chainstate::burn::db::sortdb::*;
@@ -2277,9 +2278,7 @@ pub mod test {
 
             let _burnchain_blocks_db = BurnchainDB::connect(
                 &config.burnchain.get_burnchaindb_path(),
-                first_burnchain_block_height,
-                &first_burnchain_block_hash,
-                0,
+                &config.burnchain,
                 true,
             )
             .unwrap();
@@ -2687,8 +2686,15 @@ pub mod test {
 
                 let mut burnchain_db =
                     BurnchainDB::open(&self.config.burnchain.get_burnchaindb_path(), true).unwrap();
+
+                let indexer = BitcoinIndexer::new_unit_test(&self.config.burnchain.working_dir);
                 burnchain_db
-                    .raw_store_burnchain_block(block_header.clone(), blockstack_ops)
+                    .raw_store_burnchain_block(
+                        &self.config.burnchain,
+                        &indexer,
+                        block_header.clone(),
+                        blockstack_ops,
+                    )
                     .unwrap();
 
                 (block_header.block_height, block_header_hash)

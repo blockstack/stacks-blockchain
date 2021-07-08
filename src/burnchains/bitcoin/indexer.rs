@@ -29,27 +29,32 @@ use burnchains::bitcoin::blocks::BitcoinHeaderIPC;
 use burnchains::bitcoin::messages::BitcoinMessageHandler;
 use burnchains::bitcoin::spv::*;
 use burnchains::bitcoin::Error as btc_error;
+use burnchains::db::BurnchainHeaderReader;
 use burnchains::indexer::BurnchainIndexer;
 use burnchains::indexer::*;
 use burnchains::Burnchain;
+use util::db::Error as DBError;
 
 use burnchains::bitcoin::blocks::{BitcoinBlockDownloader, BitcoinBlockParser};
 use burnchains::bitcoin::BitcoinNetworkType;
 
 use crate::types::chainstate::BurnchainHeaderHash;
+use burnchains::BurnchainBlockHeader;
 use burnchains::Error as burnchain_error;
 use burnchains::MagicBytes;
 use burnchains::BLOCKSTACK_MAGIC_MAINNET;
 
-use deps::bitcoin::blockdata::block::LoneBlockHeader;
+use deps::bitcoin::blockdata::block::{BlockHeader, LoneBlockHeader};
+use deps::bitcoin::network::encodable::VarInt;
 use deps::bitcoin::network::message::NetworkMessage;
 use deps::bitcoin::network::serialize::BitcoinHash;
 use deps::bitcoin::network::serialize::Error as btc_serialization_err;
+use deps::bitcoin::util::hash::Sha256dHash;
 use util::log;
 
 use core::{StacksEpoch, STACKS_EPOCHS_MAINNET, STACKS_EPOCHS_REGTEST, STACKS_EPOCHS_TESTNET};
 
-pub const USER_AGENT: &'static str = "Stacks/2.0";
+pub const USER_AGENT: &'static str = "Stacks/2.1";
 
 pub const BITCOIN_MAINNET: u32 = 0xD9B4BEF9;
 pub const BITCOIN_TESTNET: u32 = 0x0709110B;
@@ -169,6 +174,34 @@ impl BitcoinIndexer {
         BitcoinIndexer {
             config: config,
             runtime: runtime,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_unit_test(working_dir: &str) -> BitcoinIndexer {
+        let mut working_dir_path = PathBuf::from(working_dir);
+        if fs::metadata(&working_dir_path).is_err() {
+            fs::create_dir_all(&working_dir_path).unwrap();
+        }
+
+        working_dir_path.push("headers.sqlite");
+
+        // instantiate headers DB
+        let _ = SpvClient::new(
+            &working_dir_path.to_str().unwrap().to_string(),
+            0,
+            None,
+            BitcoinNetworkType::Regtest,
+            true,
+            false,
+        )
+        .unwrap();
+
+        BitcoinIndexer {
+            config: BitcoinIndexerConfig::default_regtest(
+                working_dir_path.to_str().unwrap().to_string(),
+            ),
+            runtime: BitcoinIndexerRuntime::new(BitcoinNetworkType::Regtest),
         }
     }
 
@@ -596,6 +629,31 @@ impl BitcoinIndexer {
 
         Ok(new_tip)
     }
+
+    #[cfg(test)]
+    pub fn raw_store_header(&mut self, header: BurnchainBlockHeader) -> Result<(), btc_error> {
+        let mut spv_client = SpvClient::new(
+            &self.config.spv_headers_path,
+            self.config.first_block,
+            None,
+            self.runtime.network_id,
+            true,
+            false,
+        )?;
+        let hdr = LoneBlockHeader {
+            header: BlockHeader {
+                bits: 0,
+                merkle_root: Sha256dHash([0u8; 32]),
+                nonce: 0,
+                prev_blockhash: header.parent_block_hash.to_bitcoin_hash(),
+                time: header.timestamp as u32,
+                version: 0x20000000,
+            },
+            tx_count: VarInt(header.num_txs),
+        };
+        spv_client.write_block_headers(header.block_height, vec![hdr])?;
+        Ok(())
+    }
 }
 
 impl Drop for BitcoinIndexer {
@@ -614,7 +672,7 @@ impl BurnchainIndexer for BitcoinIndexer {
 
     /// Connect to the Bitcoin peer network.
     /// Use the peer host and peer port given in the config file,
-    /// and loaded in on setup.  Don't call this before init().
+    /// and loaded in on setup.
     fn connect(&mut self) -> Result<(), burnchain_error> {
         self.reconnect_peer().map_err(burnchain_error::Bitcoin)
     }
@@ -792,6 +850,35 @@ impl BurnchainIndexer for BitcoinIndexer {
 
     fn parser(&self) -> BitcoinBlockParser {
         BitcoinBlockParser::new(self.runtime.network_id, self.config.magic_bytes)
+    }
+}
+
+impl BurnchainHeaderReader for BitcoinIndexer {
+    fn read_burnchain_headers(
+        &self,
+        start_height: u64,
+        end_height: u64,
+    ) -> Result<Vec<BurnchainBlockHeader>, DBError> {
+        let hdrs = self
+            .read_headers(start_height, end_height)
+            .map_err(|e| DBError::Other(format!("Burnchain error: {:?}", &e)))?;
+
+        Ok(hdrs
+            .into_iter()
+            .map(|hdr| BurnchainBlockHeader {
+                block_height: hdr.block_height,
+                block_hash: BurnchainHeaderHash::from_bitcoin_hash(&Sha256dHash(hdr.header_hash())),
+                parent_block_hash: BurnchainHeaderHash::from_bitcoin_hash(
+                    &hdr.block_header.header.prev_blockhash,
+                ),
+                num_txs: hdr.block_header.tx_count.0,
+                timestamp: hdr.block_header.header.time as u64,
+            })
+            .collect())
+    }
+    fn get_burnchain_headers_height(&self) -> Result<u64, DBError> {
+        self.get_headers_height()
+            .map_err(|e| DBError::Other(format!("Burnchain error: {:?}", &e)))
     }
 }
 

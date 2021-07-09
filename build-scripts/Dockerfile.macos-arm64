@@ -1,0 +1,32 @@
+FROM rust:buster as build
+
+ARG STACKS_NODE_VERSION="No Version Info"
+ARG GIT_BRANCH='No Branch Info'
+ARG GIT_COMMIT='No Commit Info'
+
+WORKDIR /src
+
+COPY . .
+
+RUN rustup target add aarch64-apple-darwin
+
+RUN apt-get update && apt-get install -y git clang
+RUN echo here
+RUN wget -nc "https://github.com/blockstackpbc/osxcross/releases/download/035cc17/osxcross-035cc17_xcode-v11.1.tar.xz"
+RUN tar --checkpoint=25000 -xf "osxcross-035cc17_xcode-v11.1.tar.xz" -C /tmp
+RUN cp /tmp/osxcross/bin/osxcross-llvm-dsymutil /tmp/osxcross/bin/dsymutil
+
+RUN PATH="/tmp/osxcross/bin:$PATH" \
+    LIBZ_SYS_STATIC=1 \
+    LD_LIBRARY_PATH="/tmp/osxcross/lib:$LD_LIBRARY_PATH" \
+    CC=aarch64-apple-darwin20.2-clang \
+    CXX=aarch64-apple-darwin20.2-clang++ \
+    CC_aarch64_apple_darwin=aarch64-apple-darwin20.2-clang \
+    CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=aarch64-apple-darwin20.2-clang \
+    CARGO_TARGET_AARCH64_APPLE_DARWIN_AR=aarch64-apple-darwin20.2-ar \
+    cargo build --target aarch64-apple-darwin --release --workspace=./
+
+RUN mkdir /out && cp -R /src/target/aarch64-apple-darwin/release/. /out
+
+FROM scratch AS export-stage
+COPY --from=build /out/blockstack-core /out/blockstack-cli /out/clarity-cli /out/stacks-node /

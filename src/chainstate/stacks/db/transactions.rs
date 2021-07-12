@@ -1474,7 +1474,7 @@ pub mod test {
 
             match res {
                 Err(Error::InvalidStacksTransaction(msg, false)) => {
-                    assert!(msg.contains(&err_frag), err_frag);
+                    assert!(msg.contains(&err_frag), "{}", err_frag);
                 }
                 _ => {
                     eprintln!("bad error: {:?}", &res);

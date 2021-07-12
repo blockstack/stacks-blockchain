@@ -4,10 +4,10 @@
 (define-constant MAX_POX_REWARD_CYCLES u12)
 
 ;; Default length of the PoX registration window, in burnchain blocks.
-(define-constant PREPARE_CYCLE_LENGTH u30)
+(define-constant PREPARE_CYCLE_LENGTH u50)
 
 ;; Default length of the PoX reward cycle, in burnchain blocks.
-(define-constant REWARD_CYCLE_LENGTH u150)
+(define-constant REWARD_CYCLE_LENGTH u1050)
 
 ;; Valid values for burnchain address versions.
 ;; These correspond to address hash modes in Stacks 2.0.
@@ -17,5 +17,5 @@
 (define-constant ADDRESS_VERSION_P2WSH 0x03)
 
 ;; Stacking thresholds
-(define-constant STACKING_THRESHOLD_25 u480)
-(define-constant STACKING_THRESHOLD_100 u120)
+(define-constant STACKING_THRESHOLD_25 u8000)
+(define-constant STACKING_THRESHOLD_100 u2000)

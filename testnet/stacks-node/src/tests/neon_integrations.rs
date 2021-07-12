@@ -94,7 +94,7 @@ fn neon_integration_test_conf() -> (Config, StacksAddress) {
     let magic_bytes = Config::from_config_file(ConfigFile::xenon())
         .burnchain
         .magic_bytes;
-    assert_eq!(magic_bytes.as_bytes(), &['X' as u8, '6' as u8]);
+    assert_eq!(magic_bytes.as_bytes(), &['T' as u8, '2' as u8]);
     conf.burnchain.magic_bytes = magic_bytes;
     conf.burnchain.poll_time_secs = 1;
     conf.node.pox_sync_sample_secs = 0;
@@ -376,8 +376,7 @@ fn get_tip_anchored_block(conf: &Config) -> (ConsensusHash, StacksBlock) {
         .json::<RPCPeerInfoData>()
         .unwrap();
     let stacks_tip = tip_info.stacks_tip;
-    let stacks_tip_consensus_hash =
-        ConsensusHash::from_hex(&tip_info.stacks_tip_consensus_hash).unwrap();
+    let stacks_tip_consensus_hash = tip_info.stacks_tip_consensus_hash;
 
     let stacks_id_tip =
         StacksBlockHeader::make_index_block_hash(&stacks_tip_consensus_hash, &stacks_tip);
@@ -1570,8 +1569,7 @@ fn microblock_integration_test() {
 
     assert!(tip_info.stacks_tip_height >= 3);
     let stacks_tip = tip_info.stacks_tip;
-    let stacks_tip_consensus_hash =
-        ConsensusHash::from_hex(&tip_info.stacks_tip_consensus_hash).unwrap();
+    let stacks_tip_consensus_hash = tip_info.stacks_tip_consensus_hash;
     let stacks_id_tip =
         StacksBlockHeader::make_index_block_hash(&stacks_tip_consensus_hash, &stacks_tip);
 
@@ -3516,7 +3514,7 @@ fn pox_integration_test() {
     assert_eq!(pox_info.reward_slots as u32, pox_constants.reward_slots());
     assert_eq!(pox_info.next_cycle.reward_phase_start_block_height, 210);
     assert_eq!(pox_info.next_cycle.prepare_phase_start_block_height, 205);
-    assert_eq!(pox_info.next_cycle.min_increment_ustx, 20845173515333);
+    assert_eq!(pox_info.next_cycle.min_increment_ustx, 1250710410920);
     assert_eq!(
         pox_info.prepare_cycle_length as u32,
         pox_constants.prepare_length
@@ -5361,10 +5359,9 @@ fn atlas_stress_integration_test() {
             // requests should take no more than 20ms
             assert!(
                 total_time < attempts * 50,
-                format!(
-                    "Atlas inventory request is too slow: {} >= {} * 50",
-                    total_time, attempts
-                )
+                "Atlas inventory request is too slow: {} >= {} * 50",
+                total_time,
+                attempts
             );
         }
 
@@ -5403,10 +5400,9 @@ fn atlas_stress_integration_test() {
             // requests should take no more than 40ms
             assert!(
                 total_time < attempts * 50,
-                format!(
-                    "Atlas chunk request is too slow: {} >= {} * 50",
-                    total_time, attempts
-                )
+                "Atlas chunk request is too slow: {} >= {} * 50",
+                total_time,
+                attempts
             );
         }
     }

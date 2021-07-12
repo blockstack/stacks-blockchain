@@ -20,7 +20,7 @@ pub trait ClarityMarfTrieId:
 {
     fn as_bytes(&self) -> &[u8];
     fn to_bytes(self) -> [u8; 32];
-    fn from_bytes([u8; 32]) -> Self;
+    fn from_bytes(from: [u8; 32]) -> Self;
     fn sentinel() -> Self;
 }
 

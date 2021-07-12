@@ -816,54 +816,56 @@ impl<T: Ord + Requestable + fmt::Display + std::hash::Hash> BatchedRequestsState
                     state.remaining.len()
                 );
 
-                for (event_id, request) in state.remaining.drain() {
-                    match network.http.get_conversation(event_id) {
-                        None => {
-                            if network.http.is_connecting(event_id) {
-                                debug!(
-                                    "Atlas: Request {} (event_id: {}) is still connecting",
-                                    request, event_id
-                                );
-                                pending_requests.insert(event_id, request);
-                            } else {
-                                debug!(
-                                    "Atlas: Request {} (event_id: {}) failed to connect. Temporarily blocking URL",
-                                    request,
-                                    event_id
-                                );
-                                let peer_url = request.get_url().clone();
-                                state.faulty_peers.insert(event_id, peer_url);
-                            }
-                        }
-                        Some(ref mut convo) => {
-                            match convo.try_get_response() {
-                                None => {
-                                    // still waiting
+                PeerNetwork::with_http(network, |_, ref mut http| {
+                    for (event_id, request) in state.remaining.drain() {
+                        match http.get_conversation(event_id) {
+                            None => {
+                                if http.is_connecting(event_id) {
                                     debug!(
-                                        "Atlas: Request {} (event_id: {}) is still waiting for a response",
+                                        "Atlas: Request {} (event_id: {}) is still connecting",
+                                        request, event_id
+                                    );
+                                    pending_requests.insert(event_id, request);
+                                } else {
+                                    debug!(
+                                        "Atlas: Request {} (event_id: {}) failed to connect. Temporarily blocking URL",
                                         request,
                                         event_id
                                     );
-                                    pending_requests.insert(event_id, request);
-                                    continue;
-                                }
-                                Some(response) => {
                                     let peer_url = request.get_url().clone();
-
-                                    if let HttpResponseType::NotFound(_, _) = response {
-                                        state.faulty_peers.insert(event_id, peer_url);
+                                    state.faulty_peers.insert(event_id, peer_url);
+                                }
+                            }
+                            Some(ref mut convo) => {
+                                match convo.try_get_response() {
+                                    None => {
+                                        // still waiting
+                                        debug!(
+                                            "Atlas: Request {} (event_id: {}) is still waiting for a response",
+                                            request,
+                                            event_id
+                                        );
+                                        pending_requests.insert(event_id, request);
                                         continue;
                                     }
-                                    debug!(
-                                        "Atlas: Request {} (event_id: {}) received response {:?}",
-                                        request, event_id, response
-                                    );
-                                    state.succeeded.insert(request, Some(response));
+                                    Some(response) => {
+                                        let peer_url = request.get_url().clone();
+
+                                        if let HttpResponseType::NotFound(_, _) = response {
+                                            state.faulty_peers.insert(event_id, peer_url);
+                                            continue;
+                                        }
+                                        debug!(
+                                            "Atlas: Request {} (event_id: {}) received response {:?}",
+                                            request, event_id, response
+                                        );
+                                        state.succeeded.insert(request, Some(response));
+                                    }
                                 }
                             }
                         }
                     }
-                }
+                });
 
                 if pending_requests.len() > 0 {
                     // We need to keep polling

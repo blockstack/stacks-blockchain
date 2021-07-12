@@ -5,11 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to the versioning scheme outlined in the [README.md](README.md).
 
-## [Unreleased]
+## [2.0.11.2.0]
 
-## Added
+### Added
 
-- lcov compatible coverage reporting in `clarity-cli` for Clarity contract testing.
+- `clarity-cli` will now also print a serialized version of the resulting
+  output from `eval` and `execute` commands. This serialization is in
+  hexademical string format and supports integration with other tools. (#2684)
+- `lcov`-compatible coverage reporting has been added to `clarity-cli` for
+  Clarity contract testing. (#2592)
+- The `README.md` file has new documentation about the release process. (#2726)
+
+### Changed
+
+- This change resets the testnet. (#2742)
+- Caching has been added to speed up `/v2/info` responses. (#2746)
+
+### Fixed
+
+- PoX syncing will only look back to the reward cycle prior to divergence,
+  instead of looking back over all history. This will speed up running a
+  follower node. (#2746)
+- The UTXO staleness check is re-ordered so that it occurs before the RBF-limit
+  check. This way, if stale UTXOs reached the "RBF limit" a miner will recover
+  by resetting the UTXO cache. (#2694)
+- A bug is fixed in the mocknet/helium miner that would lead to a panic if a
+  burn block occurred without a sortition in it. (#2711)
+- Documentation is fixed in cases where string and buffer types are allowed
+  but not covered in the documentation.  (#2676)
 
 ## [2.0.11.1.0]
 

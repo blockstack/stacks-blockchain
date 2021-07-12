@@ -672,7 +672,7 @@ fn spawn_peer(
                         download_backpressure,
                         this.has_more_downloads()
                     );
-                    100
+                    1
                 } else {
                     cmp::min(poll_timeout, config.node.microblock_frequency)
                 };

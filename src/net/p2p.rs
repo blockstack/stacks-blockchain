@@ -39,6 +39,7 @@ use burnchains::Burnchain;
 use burnchains::BurnchainView;
 use burnchains::PublicKey;
 use chainstate::burn::db::sortdb::{BlockHeaderCache, SortitionDB};
+use chainstate::burn::BlockSnapshot;
 use chainstate::stacks::db::StacksChainState;
 use chainstate::stacks::{MAX_BLOCK_LEN, MAX_TRANSACTION_LEN};
 use monitoring::{update_inbound_neighbors, update_outbound_neighbors};
@@ -194,7 +195,8 @@ pub struct PeerNetwork {
     pub local_peer: LocalPeer,
     pub peer_version: u32,
     pub chain_view: BurnchainView,
-    pub last_burnchain_tip: BurnchainHeaderHash,
+    pub burnchain_tip: BlockSnapshot,
+    pub chain_view_stable_consensus_hash: ConsensusHash,
 
     pub peerdb: PeerDB,
     pub atlasdb: AtlasDB,
@@ -262,7 +264,7 @@ pub struct PeerNetwork {
     pub prune_inbound_counts: HashMap<NeighborKey, u64>,
 
     // http endpoint, used for driving HTTP conversations (some of which we initiate)
-    pub http: HttpPeer,
+    pub http: Option<HttpPeer>,
 
     // our own neighbor address that we bind on
     bind_nk: NeighborKey,
@@ -311,13 +313,7 @@ impl PeerNetwork {
         chain_view: BurnchainView,
         connection_opts: ConnectionOptions,
     ) -> PeerNetwork {
-        let http = HttpPeer::new(
-            local_peer.network_id,
-            burnchain.clone(),
-            chain_view.clone(),
-            connection_opts.clone(),
-            0,
-        );
+        let http = HttpPeer::new(connection_opts.clone(), 0);
         let pub_ip = connection_opts.public_ip_address.clone();
         let pub_ip_learned = pub_ip.is_none();
         local_peer.public_ip_address = pub_ip.clone();
@@ -329,11 +325,20 @@ impl PeerNetwork {
             debug!("{:?}: disable inbound neighbor walks", &local_peer);
         }
 
+        let first_block_height = burnchain.first_block_height;
+        let first_burn_header_hash = burnchain.first_block_hash.clone();
+        let first_burn_header_ts = burnchain.first_block_timestamp;
+
         let mut network = PeerNetwork {
             local_peer: local_peer,
             peer_version: peer_version,
             chain_view: chain_view,
-            last_burnchain_tip: BurnchainHeaderHash([0u8; 32]),
+            chain_view_stable_consensus_hash: ConsensusHash([0u8; 20]),
+            burnchain_tip: BlockSnapshot::initial(
+                first_block_height,
+                &first_burn_header_hash,
+                first_burn_header_ts as u64,
+            ),
 
             peerdb: peerdb,
             atlasdb: atlasdb,
@@ -378,7 +383,7 @@ impl PeerNetwork {
             prune_outbound_counts: HashMap::new(),
             prune_inbound_counts: HashMap::new(),
 
-            http: http,
+            http: Some(http),
             bind_nk: NeighborKey {
                 network_id: 0,
                 peer_version: 0,
@@ -407,8 +412,26 @@ impl PeerNetwork {
             fault_last_disconnect: 0,
         };
 
+        network.init_block_downloader();
         network.init_attachments_downloader(vec![]);
+
         network
+    }
+
+    /// Do something with the HTTP peer.
+    /// NOTE: the HTTP peer is *always* instantiated; it's just an Option<..> so its methods can
+    /// receive a ref to the PeerNetwork that contains it.
+    pub fn with_http<F, R>(network: &mut PeerNetwork, to_do: F) -> R
+    where
+        F: FnOnce(&mut PeerNetwork, &mut HttpPeer) -> R,
+    {
+        let mut http = network
+            .http
+            .take()
+            .expect("BUG: HTTP peer is not instantiated");
+        let res = to_do(network, &mut http);
+        network.http = Some(http);
+        res
     }
 
     /// start serving.
@@ -429,7 +452,9 @@ impl PeerNetwork {
         self.p2p_network_handle = p2p_handle;
         self.http_network_handle = http_handle;
 
-        self.http.set_server_handle(http_handle);
+        PeerNetwork::with_http(self, |_, ref mut http| {
+            http.set_server_handle(http_handle);
+        });
 
         self.bind_nk = NeighborKey {
             network_id: self.local_peer.network_id,
@@ -2375,6 +2400,7 @@ impl PeerNetwork {
         sortdb: &SortitionDB,
         chainstate: &mut StacksChainState,
         dns_client: &mut DNSClient,
+        ibd: bool,
         network_result: &mut NetworkResult,
     ) -> Result<bool, net_error> {
         if self.connection_opts.disable_block_download {
@@ -2394,7 +2420,29 @@ impl PeerNetwork {
             mut microblocks,
             mut broken_http_peers,
             mut broken_p2p_peers,
-        ) = self.download_blocks(sortdb, chainstate, dns_client)?;
+        ) = match self.download_blocks(sortdb, chainstate, dns_client, ibd) {
+            Ok(x) => x,
+            Err(net_error::NotConnected) => {
+                // there was simply nothing to do
+                debug!(
+                    "{:?}: no progress can be made on the block downloader -- not connected",
+                    &self.local_peer
+                );
+                return Ok(true);
+            }
+            Err(net_error::Transient(s)) => {
+                // not fatal, but just skip and try again
+                info!("Transient network error while downloading blocks: {}", &s);
+                return Ok(true);
+            }
+            Err(e) => {
+                warn!(
+                    "{:?}: Failed to download blocks: {:?}",
+                    &self.local_peer, &e
+                );
+                return Err(e);
+            }
+        };
 
         network_result.download_pox_id = old_pox_id;
         network_result.blocks.append(&mut blocks);
@@ -2429,7 +2477,9 @@ impl PeerNetwork {
                     "{:?}: De-register dead/broken HTTP connection {}",
                     &network.local_peer, dead_event
                 );
-                network.http.deregister_http(network_state, dead_event);
+                PeerNetwork::with_http(network, |_, http| {
+                    http.deregister_http(network_state, dead_event);
+                });
             }
             Ok(())
         });
@@ -2717,7 +2767,7 @@ impl PeerNetwork {
             let mut microblocks_to_broadcast = HashMap::new();
 
             let start_block_height = self.burnchain.reward_cycle_to_block_height(reward_cycle);
-            let highest_snapshot = SortitionDB::get_canonical_burn_chain_tip(sortdb.conn())?;
+            let highest_snapshot = self.burnchain_tip.clone();
             for nk in neighbor_keys.iter() {
                 if total_blocks_to_broadcast >= self.connection_opts.max_block_push
                     && total_microblocks_to_broadcast >= self.connection_opts.max_microblock_push
@@ -3007,19 +3057,6 @@ impl PeerNetwork {
                             self.work_state = PeerNetworkWorkState::Prune;
                         }
 
-                        // pass along hints
-                        if let Some(ref inv_sync) = self.inv_state {
-                            if inv_sync.hint_learned_data {
-                                // tell the downloader to wake up
-                                if let Some(ref mut downloader) = self.block_downloader {
-                                    downloader.hint_download_rescan(cmp::min(
-                                        self.chain_view.burn_block_height,
-                                        inv_sync.hint_learned_data_height,
-                                    ));
-                                }
-                            }
-                        }
-
                         if !inv_throttled {
                             // only count an inv_sync as passing if there's an always-allowed node
                             // in our inv state
@@ -3069,28 +3106,63 @@ impl PeerNetwork {
 
                             // hint to the downloader to start scanning at the sortition
                             // height we just synchronized
-                            let start_download_sortition =
-                                if let Some(ref inv_state) = self.inv_state {
-                                    debug!(
-                                    "{:?}: Begin downloader synchronization at sortition height {}",
-                                    &self.local_peer, inv_state.block_sortition_start
+                            let start_download_sortition = if let Some(ref inv_state) =
+                                self.inv_state
+                            {
+                                let (consensus_hash, _) =
+                                    SortitionDB::get_canonical_stacks_chain_tip_hash(
+                                        sortdb.conn(),
+                                    )?;
+
+                                let stacks_tip_sortition_height =
+                                    SortitionDB::get_block_snapshot_consensus(
+                                        sortdb.conn(),
+                                        &consensus_hash,
+                                    )?
+                                    .map(|sn| sn.block_height)
+                                    .unwrap_or(self.burnchain.first_block_height)
+                                    .saturating_sub(self.burnchain.first_block_height);
+
+                                let sortition_height_start = cmp::min(
+                                    stacks_tip_sortition_height,
+                                    inv_state.block_sortition_start,
                                 );
-                                    inv_state.block_sortition_start
-                                } else {
-                                    // really unreachable, but why tempt fate?
-                                    warn!(
-                                        "{:?}: Inventory state machine not yet initialized",
-                                        &self.local_peer
+
+                                debug!(
+                                        "{:?}: Begin downloader synchronization at sortition height {} min({},{})",
+                                        &self.local_peer,
+                                        sortition_height_start,
+                                        inv_state.block_sortition_start,
+                                        stacks_tip_sortition_height
                                     );
-                                    0
-                                };
+
+                                sortition_height_start
+                            } else {
+                                // really unreachable, but why tempt fate?
+                                warn!(
+                                    "{:?}: Inventory state machine not yet initialized",
+                                    &self.local_peer
+                                );
+                                0
+                            };
 
                             if let Some(ref mut downloader) = self.block_downloader {
+                                debug!(
+                                    "{:?}: wake up downloader at sortition height {}",
+                                    &self.local_peer, start_download_sortition
+                                );
                                 downloader.hint_block_sortition_height_available(
                                     start_download_sortition,
+                                    ibd,
                                 );
                                 downloader.hint_microblock_sortition_height_available(
                                     start_download_sortition,
+                                    ibd,
+                                );
+                            } else {
+                                warn!(
+                                    "{:?}: Block downloader not yet initialized",
+                                    &self.local_peer
                                 );
                             }
                         }
@@ -3104,6 +3176,7 @@ impl PeerNetwork {
                                 sortdb,
                                 chainstate,
                                 *dns_client,
+                                ibd,
                                 network_result,
                             )? {
                                 // advance work state
@@ -3211,7 +3284,9 @@ impl PeerNetwork {
                                 "Atlas: Deregistering faulty connection (event_id: {})",
                                 event_id
                             );
-                            network.http.deregister_http(network_state, event_id);
+                            PeerNetwork::with_http(network, |_, http| {
+                                http.deregister_http(network_state, event_id);
+                            });
                         }
                         Ok(())
                     },
@@ -3556,7 +3631,7 @@ impl PeerNetwork {
             // have the downloader request this block if it's new
             match self.block_downloader {
                 Some(ref mut downloader) => {
-                    downloader.hint_block_sortition_height_available(block_sortition_height);
+                    downloader.hint_block_sortition_height_available(block_sortition_height, false);
                 }
                 None => {}
             }
@@ -3623,7 +3698,8 @@ impl PeerNetwork {
             // have the downloader request this block if it's new
             match self.block_downloader {
                 Some(ref mut downloader) => {
-                    downloader.hint_microblock_sortition_height_available(mblock_sortition_height);
+                    downloader
+                        .hint_microblock_sortition_height_available(mblock_sortition_height, false);
                 }
                 None => {}
             }
@@ -4124,18 +4200,40 @@ impl PeerNetwork {
             let new_chain_view =
                 SortitionDB::get_burnchain_view(&sortdb.conn(), &self.burnchain, &sn)?;
 
+            let new_chain_view_stable_consensus_hash = {
+                let ic = sortdb.index_conn();
+                let ancestor_sn = SortitionDB::get_ancestor_snapshot(
+                    &ic,
+                    new_chain_view.burn_stable_block_height,
+                    &sn.sortition_id,
+                )?
+                .unwrap_or(SortitionDB::get_first_block_snapshot(sortdb.conn())?);
+                ancestor_sn.consensus_hash
+            };
+
             // wake up the inv-sync and downloader -- we have potentially more sortitions
             self.hint_sync_invs(self.chain_view.burn_stable_block_height);
-            self.hint_download_rescan(self.chain_view.burn_stable_block_height);
+            self.hint_download_rescan(
+                self.chain_view
+                    .burn_stable_block_height
+                    .saturating_sub(self.burnchain.first_block_height),
+                false,
+            );
+
+            // update cached burnchain view for /v2/info
             self.chain_view = new_chain_view;
+            self.chain_view_stable_consensus_hash = new_chain_view_stable_consensus_hash;
         }
 
-        if sn.burn_header_hash != self.last_burnchain_tip {
+        if sn.burn_header_hash != self.burnchain_tip.burn_header_hash {
             // try processing previously-buffered messages (best-effort)
-            self.last_burnchain_tip = sn.burn_header_hash;
             let buffered_messages = mem::replace(&mut self.pending_messages, HashMap::new());
             ret = self.handle_unsolicited_messages(sortdb, chainstate, buffered_messages, false)?;
         }
+
+        // update cached stacks chain view for /v2/info
+        self.burnchain_tip = sn;
+
         Ok(ret)
     }
 
@@ -4158,16 +4256,6 @@ impl PeerNetwork {
             test_debug!("{:?}: network not connected", &self.local_peer);
             return Err(net_error::NotConnected);
         }
-
-        // update local-peer state
-        self.refresh_local_peer()?;
-
-        // update burnchain view
-        let unsolicited_buffered_messages = self.refresh_burnchain_view(sortdb, chainstate)?;
-        network_result.consume_unsolicited(unsolicited_buffered_messages);
-
-        // update PoX view
-        self.refresh_sortition_view(sortdb)?;
 
         // set up new inbound conversations
         self.process_new_sockets(&mut poll_state)?;
@@ -4400,6 +4488,16 @@ impl PeerNetwork {
             self.num_downloader_passes,
         );
 
+        // update local-peer state
+        self.refresh_local_peer()?;
+
+        // update burnchain view, before handling any HTTP connections
+        let unsolicited_buffered_messages = self.refresh_burnchain_view(sortdb, chainstate)?;
+        network_result.consume_unsolicited(unsolicited_buffered_messages);
+
+        // update PoX view, before handling any HTTP connections
+        self.refresh_sortition_view(sortdb)?;
+
         // This operation needs to be performed before any early return:
         // Events are being parsed and dispatched here once and we want to
         // enqueue them.
@@ -4419,18 +4517,17 @@ impl PeerNetwork {
         }
 
         PeerNetwork::with_network_state(self, |ref mut network, ref mut network_state| {
-            let http_stacks_msgs = network.http.run(
-                network_state,
-                network.chain_view.clone(),
-                &network.peers,
-                sortdb,
-                &network.peerdb,
-                &mut network.atlasdb,
-                chainstate,
-                mempool,
-                http_poll_state,
-                handler_args,
-            )?;
+            let http_stacks_msgs = PeerNetwork::with_http(network, |ref mut net, ref mut http| {
+                http.run(
+                    network_state,
+                    net,
+                    sortdb,
+                    chainstate,
+                    mempool,
+                    http_poll_state,
+                    handler_args,
+                )
+            })?;
             network_result.consume_http_uploads(http_stacks_msgs);
             Ok(())
         })?;

@@ -785,9 +785,9 @@ mod tests {
             Err(eres) => match eres {
                 SerializationError::IOError(ioe) => match ioe.err.kind() {
                     std::io::ErrorKind::UnexpectedEof => {}
-                    _ => assert!(false, format!("Invalid I/O error: {:?}", &ioe)),
+                    _ => assert!(false, "Invalid I/O error: {:?}", &ioe),
                 },
-                _ => assert!(false, format!("Invalid deserialize error: {:?}", &eres)),
+                _ => assert!(false, "Invalid deserialize error: {:?}", &eres),
             },
         }
     }

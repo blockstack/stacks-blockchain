@@ -50,19 +50,19 @@ mod tests {
         let config = ConfigFile::from_str(
             r#"
             [[ustx_balance]]
-            address = "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6"
+            address = "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
             amount = 10000000000000000
 
             [[ustx_balance]]
-            address = "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y"
+            address = "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
             amount = 10000000000000000
 
             [[mstx_balance]] # legacy property name
-            address = "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR"
+            address = "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
             amount = 10000000000000000
 
             [[mstx_balance]] # legacy property name
-            address = "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP"
+            address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
             amount = 10000000000000000
             "#,
         );
@@ -73,19 +73,19 @@ mod tests {
         assert_eq!(balances.len(), 4);
         assert_eq!(
             balances[0].address,
-            "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6"
+            "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
         );
         assert_eq!(
             balances[1].address,
-            "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y"
+            "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
         );
         assert_eq!(
             balances[2].address,
-            "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR"
+            "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
         );
         assert_eq!(
             balances[3].address,
-            "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP"
+            "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
         );
     }
 }
@@ -109,141 +109,13 @@ impl ConfigFile {
         config
     }
 
-    pub fn neon() -> ConfigFile {
-        let burnchain = BurnchainConfigFile {
-            mode: Some("neon".to_string()),
-            rpc_port: Some(18443),
-            peer_port: Some(18444),
-            peer_host: Some("neon.blockstack.org".to_string()),
-            ..BurnchainConfigFile::default()
-        };
-
-        let node = NodeConfigFile {
-            bootstrap_node: Some("038dd4f26101715853533dee005f0915375854fd5be73405f679c1917a5d4d16aa@neon.blockstack.org:20444".to_string()),
-            miner: Some(false),
-            ..NodeConfigFile::default()
-        };
-
-        let balances = vec![
-            InitialBalanceFile {
-                address: "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP".to_string(),
-                amount: 10000000000000000,
-            },
-        ];
-
-        ConfigFile {
-            burnchain: Some(burnchain),
-            node: Some(node),
-            ustx_balance: Some(balances),
-            ..ConfigFile::default()
-        }
-    }
-
-    pub fn argon() -> ConfigFile {
-        let burnchain = BurnchainConfigFile {
-            mode: Some("argon".to_string()),
-            rpc_port: Some(18443),
-            peer_port: Some(18444),
-            peer_host: Some("argon.blockstack.org".to_string()),
-            process_exit_at_block_height: Some(28160), // 1 block every 30s, 24 hours * 8 + 300 blocks initially mined for seeding faucet / miner
-            ..BurnchainConfigFile::default()
-        };
-
-        let node = NodeConfigFile {
-            bootstrap_node: Some("048dd4f26101715853533dee005f0915375854fd5be73405f679c1917a5d4d16aaaf3c4c0d7a9c132a36b8c5fe1287f07dad8c910174d789eb24bdfb5ae26f5f27@argon.blockstack.org:20444".to_string()),
-            miner: Some(false),
-            ..NodeConfigFile::default()
-        };
-
-        let balances = vec![
-            InitialBalanceFile {
-                address: "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP".to_string(),
-                amount: 10000000000000000,
-            },
-        ];
-
-        ConfigFile {
-            burnchain: Some(burnchain),
-            node: Some(node),
-            ustx_balance: Some(balances),
-            ..ConfigFile::default()
-        }
-    }
-
-    pub fn krypton() -> ConfigFile {
-        let burnchain = BurnchainConfigFile {
-            mode: Some("krypton".to_string()),
-            rpc_port: Some(18443),
-            peer_port: Some(18444),
-            peer_host: Some("bitcoind.krypton.blockstack.org".to_string()),
-            process_exit_at_block_height: Some(5130), // 1 block every 2m, 24 hours * 7 + 300 blocks initially mined for seeding faucet / miner
-            ..BurnchainConfigFile::default()
-        };
-
-        let node = NodeConfigFile {
-            bootstrap_node: Some("048dd4f26101715853533dee005f0915375854fd5be73405f679c1917a5d4d16aaaf3c4c0d7a9c132a36b8c5fe1287f07dad8c910174d789eb24bdfb5ae26f5f27@krypton.blockstack.org:20444".to_string()),
-            miner: Some(false),
-            ..NodeConfigFile::default()
-        };
-
-        let balances = vec![
-            InitialBalanceFile {
-                address: "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR".to_string(),
-                amount: 10000000000000000,
-            },
-            InitialBalanceFile {
-                address: "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP".to_string(),
-                amount: 10000000000000000,
-            },
-        ];
-
-        ConfigFile {
-            burnchain: Some(burnchain),
-            node: Some(node),
-            ustx_balance: Some(balances),
-            ..ConfigFile::default()
-        }
-    }
-
     pub fn xenon() -> ConfigFile {
         let burnchain = BurnchainConfigFile {
             mode: Some("xenon".to_string()),
             rpc_port: Some(18332),
             peer_port: Some(18333),
             peer_host: Some("bitcoind.xenon.blockstack.org".to_string()),
-            magic_bytes: Some("X6".into()),
+            magic_bytes: Some("T2".into()),
             ..BurnchainConfigFile::default()
         };
 
@@ -255,19 +127,19 @@ impl ConfigFile {
 
         let balances = vec![
             InitialBalanceFile {
-                address: "STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6".to_string(),
+                address: "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2".to_string(),
                 amount: 10000000000000000,
             },
             InitialBalanceFile {
-                address: "ST11NJTTKGVT6D1HY4NJRVQWMQM7TVAR091EJ8P2Y".to_string(),
+                address: "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF".to_string(),
                 amount: 10000000000000000,
             },
             InitialBalanceFile {
-                address: "ST1HB1T8WRNBYB0Y3T7WXZS38NKKPTBR3EG9EPJKR".to_string(),
+                address: "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H".to_string(),
                 amount: 10000000000000000,
             },
             InitialBalanceFile {
-                address: "STRYYQQ9M8KAF4NS7WNZQYY59X93XEKR31JP64CP".to_string(),
+                address: "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B".to_string(),
                 amount: 10000000000000000,
             },
         ];

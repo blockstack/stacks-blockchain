@@ -454,7 +454,7 @@ const SET_VAR_API: SpecialAPI = SpecialAPI {
     output_type: "bool",
     signature: "(var-set var-name expr1)",
     description: "The `var-set` function sets the value associated with the input variable to the
-inputted value.",
+inputted value. The function always returns `true`.",
     example: "
 (define-data-var cursor int 6)
 (var-get cursor) ;; Returns 6

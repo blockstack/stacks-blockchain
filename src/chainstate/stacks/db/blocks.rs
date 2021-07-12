@@ -9000,21 +9000,17 @@ pub mod test {
             for j in 0..(i + 1) {
                 assert!(
                     block_inv_all.has_ith_block(j as u16),
-                    format!(
-                        "Missing block {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.block_bitvec)
-                    )
+                    "Missing block {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.block_bitvec)
                 );
 
                 // microblocks not stored yet, so they should be marked absent
                 assert!(
                     !block_inv_all.has_ith_microblock_stream(j as u16),
-                    format!(
-                        "Have microblock {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.microblocks_bitvec)
-                    )
+                    "Have microblock {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.microblocks_bitvec)
                 );
             }
             for j in i + 1..blocks.len() {
@@ -9094,19 +9090,15 @@ pub mod test {
                 test_debug!("Test bit {} ({})", j, i);
                 assert!(
                     !block_inv_all.has_ith_block(j as u16),
-                    format!(
-                        "Have orphaned block {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.block_bitvec)
-                    )
+                    "Have orphaned block {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.block_bitvec)
                 );
                 assert!(
                     !block_inv_all.has_ith_microblock_stream(j as u16),
-                    format!(
-                        "Still have microblock {} from bitvec {}",
-                        j,
-                        to_hex(&block_inv_all.microblocks_bitvec)
-                    )
+                    "Still have microblock {} from bitvec {}",
+                    j,
+                    to_hex(&block_inv_all.microblocks_bitvec)
                 );
             }
             for j in (i + 1)..blocks.len() {

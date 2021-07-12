@@ -35,7 +35,7 @@ use net::atlas::AtlasDB;
 use net::connection::*;
 use net::db::*;
 use net::http::*;
-use net::p2p::PeerMap;
+use net::p2p::{PeerMap, PeerNetwork};
 use net::poll::*;
 use net::rpc::*;
 use net::Error as net_error;
@@ -55,9 +55,6 @@ use core::mempool::*;
 
 #[derive(Debug)]
 pub struct HttpPeer {
-    pub network_id: u32,
-    pub chain_view: BurnchainView,
-
     // ongoing http conversations (either they reached out to us, or we to them)
     pub peers: HashMap<usize, ConversationHttp>,
     pub sockets: HashMap<usize, mio_net::TcpStream>,
@@ -76,31 +73,19 @@ pub struct HttpPeer {
     // server network handle
     pub http_server_handle: usize,
 
-    // info on the burn chain we're tracking
-    pub burnchain: Burnchain,
-
     // connection options
     pub connection_opts: ConnectionOptions,
 }
 
 impl HttpPeer {
-    pub fn new(
-        network_id: u32,
-        burnchain: Burnchain,
-        chain_view: BurnchainView,
-        conn_opts: ConnectionOptions,
-        server_handle: usize,
-    ) -> HttpPeer {
+    pub fn new(conn_opts: ConnectionOptions, server_handle: usize) -> HttpPeer {
         HttpPeer {
-            network_id: network_id,
-            chain_view: chain_view,
             peers: HashMap::new(),
             sockets: HashMap::new(),
 
             connecting: HashMap::new(),
             http_server_handle: server_handle,
 
-            burnchain: burnchain,
             connection_opts: conn_opts,
         }
     }
@@ -147,14 +132,15 @@ impl HttpPeer {
     pub fn connect_http(
         &mut self,
         network_state: &mut NetworkState,
+        network: &PeerNetwork,
         data_url: UrlString,
         addr: SocketAddr,
         request: Option<HttpRequestType>,
     ) -> Result<usize, net_error> {
         if let Some(event_id) = self.find_free_conversation(&data_url) {
             let http_nk = NeighborKey {
-                peer_version: self.burnchain.peer_version,
-                network_id: self.network_id,
+                peer_version: network.burnchain.peer_version,
+                network_id: network.local_peer.network_id,
                 addrbytes: PeerAddress::from_socketaddr(&addr),
                 port: addr.port(),
             };
@@ -260,8 +246,6 @@ impl HttpPeer {
         };
 
         let mut new_convo = ConversationHttp::new(
-            self.network_id,
-            &self.burnchain,
             client_addr.clone(),
             outbound_url.clone(),
             peer_host,
@@ -434,11 +418,8 @@ impl HttpPeer {
     /// Returns whether or not the convo is still alive, as well as any message(s) that need to be
     /// forwarded to the peer network.
     fn process_http_conversation(
-        chain_view: &BurnchainView,
-        peers: &PeerMap,
+        network: &mut PeerNetwork,
         sortdb: &SortitionDB,
-        peerdb: &PeerDB,
-        atlasdb: &mut AtlasDB,
         chainstate: &mut StacksChainState,
         mempool: &mut MemPoolDB,
         event_id: usize,
@@ -508,16 +489,7 @@ impl HttpPeer {
         // react to inbound messages -- do we need to send something out, or fulfill requests
         // to other threads?  Try to chat even if the recv() failed, since we'll want to at
         // least drain the conversation inbox.
-        let msgs = match convo.chat(
-            chain_view,
-            peers,
-            sortdb,
-            peerdb,
-            atlasdb,
-            chainstate,
-            mempool,
-            handler_args,
-        ) {
+        let msgs = match convo.chat(network, sortdb, chainstate, mempool, handler_args) {
             Ok(msgs) => msgs,
             Err(e) => {
                 debug!(
@@ -589,10 +561,8 @@ impl HttpPeer {
     fn process_ready_sockets(
         &mut self,
         poll_state: &mut NetworkPollState,
-        peers: &PeerMap,
+        network: &mut PeerNetwork,
         sortdb: &SortitionDB,
-        peerdb: &PeerDB,
-        atlasdb: &mut AtlasDB,
         chainstate: &mut StacksChainState,
         mempool: &mut MemPoolDB,
         handler_args: &RPCHandlerArgs,
@@ -619,11 +589,8 @@ impl HttpPeer {
                     // activity on a http socket
                     test_debug!("Process HTTP data from {:?}", convo);
                     match HttpPeer::process_http_conversation(
-                        &self.chain_view,
-                        peers,
+                        network,
                         sortdb,
-                        peerdb,
-                        atlasdb,
                         chainstate,
                         mempool,
                         *event_id,
@@ -687,19 +654,13 @@ impl HttpPeer {
     pub fn run(
         &mut self,
         network_state: &mut NetworkState,
-        new_chain_view: BurnchainView,
-        p2p_peers: &PeerMap,
+        network: &mut PeerNetwork,
         sortdb: &SortitionDB,
-        peerdb: &PeerDB,
-        atlasdb: &mut AtlasDB,
         chainstate: &mut StacksChainState,
         mempool: &mut MemPoolDB,
         mut poll_state: NetworkPollState,
         handler_args: &RPCHandlerArgs,
     ) -> Result<Vec<StacksMessageType>, net_error> {
-        // update burnchain snapshot
-        self.chain_view = new_chain_view;
-
         // set up new inbound conversations
         self.process_new_sockets(network_state, chainstate, &mut poll_state)?;
 
@@ -709,10 +670,8 @@ impl HttpPeer {
         // run existing conversations, clear out broken ones, and get back messages forwarded to us
         let (stacks_msgs, error_events) = self.process_ready_sockets(
             &mut poll_state,
-            p2p_peers,
+            network,
             sortdb,
-            peerdb,
-            atlasdb,
             chainstate,
             mempool,
             handler_args,

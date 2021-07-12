@@ -73,7 +73,7 @@ impl PoxSyncWatchdogComms {
                 return Ok(false);
             }
             self.interruptable_sleep(1)?;
-            std::sync::atomic::spin_loop_hint();
+            std::hint::spin_loop();
         }
         return Ok(true);
     }
@@ -99,7 +99,7 @@ impl PoxSyncWatchdogComms {
                 return Ok(false);
             }
             self.interruptable_sleep(1)?;
-            std::sync::atomic::spin_loop_hint();
+            std::hint::spin_loop();
         }
         return Ok(true);
     }

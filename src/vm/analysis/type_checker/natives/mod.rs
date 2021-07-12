@@ -482,7 +482,7 @@ fn check_secp256k1_recover(
     check_argument_count(2, args)?;
     checker.type_check_expects(&args[0], context, &BUFF_32)?;
     checker.type_check_expects(&args[1], context, &BUFF_65)?;
-    Ok(TypeSignature::new_response(BUFF_33, TypeSignature::UIntType).unwrap())
+    Ok(TypeSignature::new_response(BUFF_33.clone(), TypeSignature::UIntType).unwrap())
 }
 
 fn check_secp256k1_verify(

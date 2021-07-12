@@ -1,5 +1,5 @@
 [package]
-name = "blockstack-core"
+name = "lib-clarity-vm"
 version = "0.0.1"
 authors = [ "Jude Nelson <jude@stacks.org>",
             "Aaron Blankstein <aaron@blockstack.com>",
@@ -15,34 +15,11 @@ readme = "README.md"
 debug = true
 
 [lib]
-name = "blockstack_lib"
-path = "src/lib.rs"
-
-[[bin]]
-name = "blockstack-core"
-path = "src/main.rs"
-
-[[bin]]
-name = "clarity-cli"
-path = "src/clarity_cli.rs"
-
-[[bin]]
-name = "blockstack-cli"
-path = "src/blockstack_cli.rs"
-
-[[bench]]
-name = "marf_bench"
-harness = false
-
-[[bench]]
-name = "large_contract_bench"
-harness = false
-
-[[bench]]
-name = "block_limits"
-harness = false
+name = "libvm"
+path = "../src/libvm.rs"
 
 [dependencies]
+tini = "0.2"
 rand = "=0.7.2"
 rand_chacha = "=0.2.2"
 serde = "1"
@@ -93,7 +70,7 @@ assert-json-diff = "1.0.0"
 # a nightly rustc regression (35dbef235 2021-03-02) prevents criterion from compiling
 #  but it isn't necessary for tests: only benchmarks. therefore, commenting out for now.
 # criterion = "0.3"
-stx_genesis = { package = "stx-genesis", path = "./stx-genesis/."}
+stx_genesis = { package = "stx-genesis", path = "../stx-genesis/."}
 
 [features]
 default = ["developer-mode"]
@@ -107,11 +84,3 @@ opt-level = 2
 
 [target.'cfg(all(target_arch = "x86_64", not(target_env = "msvc")))'.dependencies]
 sha2-asm = "0.5.3"
-
-[workspace]
-members = [
-    ".",
-    "libvm",
-    "stx-genesis",
-    "testnet/stacks-node",
-    "testnet/puppet-chain"]

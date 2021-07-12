@@ -48,7 +48,7 @@ jobs:
       - run:
           no_output_timeout: 200m
           command: |
-            cargo test -j 1 --workspace
+            cargo test -j 1 --workspace --exclude lib-clarity-vm
   all_tests:
     docker:
       - image: rust:1.40-stretch

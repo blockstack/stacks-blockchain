@@ -566,6 +566,11 @@ define_named_enum!(BlockInfoProperty {
     MinerAddress("miner-address"),
 });
 
+define_named_enum!(PrincipalProperty {
+    Version("version"),
+    PubKeyHash("pub-key-hash"),
+});
+
 impl OptionalData {
     pub fn type_signature(&self) -> TypeSignature {
         let type_result = match self.data {
@@ -599,6 +604,16 @@ impl BlockInfoProperty {
             Time => TypeSignature::UIntType,
             IdentityHeaderHash | VrfSeed | HeaderHash | BurnchainHeaderHash => BUFF_32.clone(),
             MinerAddress => TypeSignature::PrincipalType,
+        }
+    }
+}
+
+impl PrincipalProperty {
+    pub fn type_result(&self) -> TypeSignature {
+        use self::PrincipalProperty::*;
+        match self {
+            Version => TypeSignature::UIntType,
+            PubKeyHash => BUFF_20.clone(),
         }
     }
 }

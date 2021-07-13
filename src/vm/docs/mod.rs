@@ -264,6 +264,46 @@ Note: This function is only available starting with Stacks 2.1.",
 "#,
 };
 
+const PARSE_PRINCIPAL_API: SimpleFunctionAPI = SimpleFunctionAPI {
+    name: None,
+    signature: "(parse-principal property-name principal-address)",
+    description: "A principal value is a concatenation of two things: a single *version byte*
+(indicating the type of account and the type of network that this principal can spend tokens on),
+and a 20-byte *public key hash* (indicating the principal's unique identity).
+`parse-principal` is used to decompose a principal into its component parts.
+
+By setting `property-name` to `version`, one recovers version byte.
+
+By setting `property-name` to `pub-key-hash`, one recovers the 20-byte buffer representing the 
+public key hash of the user.
+
+Note: This function is only available starting with Stacks 2.1.",
+    example: r#"
+(parse-principal version 'STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6) ;; Returns u26
+(parse-principal pub-key-hash 'STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6) ;; Returns 0x164247d6f2b425ac5771423ae6c80c754f7172b0
+"#,
+};
+
+const ASSEMBLE_PRINCIPAL_API: SimpleFunctionAPI = SimpleFunctionAPI {
+    name: None,
+    signature: "(assemble-principal version-byte public-key-hash)",
+    description: "A principal value is a concatenation of two things: a single *version byte*
+(indicating the type of account and the type of network that this principal can spend tokens on),
+and a 20-byte *public key hash* (characterizing the principal's unique identity).
+`assemble-principal` takes such a *version byte*, of type `uint`, 
+and a *public key hash*, of type `(buff 20)`, and creates a corresponding object of type `principal`.
+
+The version byte should be `22` for a single-signature account on mainnet, `20`
+for a multi-signature account on mainnet, `26` for a single-signature account on
+a testnet, `21` for a multi-signature account on a testnet. The public key hash
+should be a 20-byte buffer containing the hash of a public key.
+
+Note: This function is only available starting with Stacks 2.1.",
+    example: r#"
+(assemble-principal u22 0xfa6bf38ed557fe417333710d6033e9419391a320) ;; Returns SP3X6QWWETNBZWGBK6DRGTR1KX50S74D3433WDGJY
+"#,
+};
+
 const STRING_TO_INT_API: SimpleFunctionAPI = SimpleFunctionAPI {
     name: None,
     signature: "(string-to-int (string-ascii|string-utf8))",
@@ -1806,6 +1846,8 @@ fn make_api_reference(function: &NativeFunctions) -> FunctionAPI {
         BuffToIntBe => make_for_simple_native(&BUFF_TO_INT_BE_API, &BuffToIntBe, name),
         BuffToUIntBe => make_for_simple_native(&BUFF_TO_UINT_BE_API, &BuffToUIntBe, name),
         IsStandard => make_for_simple_native(&IS_STANDARD_API, &IsStandard, name),
+        ParsePrincipal => make_for_simple_native(&PARSE_PRINCIPAL_API, &IsStandard, name),
+        AssemblePrincipal => make_for_simple_native(&ASSEMBLE_PRINCIPAL_API, &IsStandard, name),
         StringToInt => make_for_simple_native(&STRING_TO_INT_API, &StringToInt, name),
         StringToUInt => make_for_simple_native(&STRING_TO_UINT_API, &StringToUInt, name),
         IntToAscii => make_for_simple_native(&INT_TO_ASCII_API, &IntToAscii, name),

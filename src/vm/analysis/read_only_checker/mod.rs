@@ -182,10 +182,10 @@ impl<'a, 'b> ReadOnlyChecker<'a, 'b> {
             | UnwrapErrRet | IsOkay | IsNone | Asserts | Unwrap | UnwrapErr | Match | IsErr
             | IsSome | TryRet | ToUInt | ToInt | BuffToIntLe | BuffToUIntLe | BuffToIntBe
             | BuffToUIntBe | IntToAscii | IntToUtf8 | StringToInt | StringToUInt | IsStandard
-            | Append | Concat | AsMaxLen | ContractOf | PrincipalOf | ListCons | GetBlockInfo
-            | TupleGet | TupleMerge | Len | Print | AsContract | Begin | FetchVar
-            | GetStxBalance | StxGetAccount | GetTokenBalance | GetAssetOwner | GetTokenSupply
-            | ElementAt | IndexOf => {
+            | ParsePrincipal | AssemblePrincipal | Append | Concat | AsMaxLen | ContractOf
+            | PrincipalOf | ListCons | GetBlockInfo | TupleGet | TupleMerge | Len | Print
+            | AsContract | Begin | FetchVar | GetStxBalance | StxGetAccount | GetTokenBalance
+            | GetAssetOwner | GetTokenSupply | ElementAt | IndexOf => {
                 // Check all arguments.
                 self.check_all_read_only(args)
             }

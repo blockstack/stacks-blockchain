@@ -84,6 +84,8 @@ pub fn get_simple_test(function: &NativeFunctions) -> &'static str {
         BuffToIntBe => "(buff-to-int-be 0x00000000000000000000000000000001)",
         BuffToUIntBe => "(buff-to-uint-be 0x00000000000000000000000000000001)",
         IsStandard => "(is-standard 'STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6)",
+        ParsePrincipal => "(parse-principal version 'STB44HYPYAT2BB2QE513NSP81HTMYWBJP02HPGK6)",
+        AssemblePrincipal => "(assemble-principal u26 0x164247d6f2b425ac5771423ae6c80c754f7172b0)",
         StringToInt => r#"(string-to-int "-1")"#,
         StringToUInt => r#"(string-to-uint "1")"#,
         IntToAscii => r#"(int-to-ascii 1)"#,

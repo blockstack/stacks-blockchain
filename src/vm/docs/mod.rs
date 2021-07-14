@@ -1765,6 +1765,18 @@ principal isn't materialized, it returns 0.
 ",
 };
 
+const STX_GET_ACCOUNT: SimpleFunctionAPI = SimpleFunctionAPI {
+    name: None,
+    signature: "(stx-account owner)",
+    description: "`stx-account` is used to query the STX account of the `owner` principal.
+
+This function returns a tuple with the canonical account representation for an STX account.
+This includes the current amount of unlocked STX, the current amount of locked STX, and the
+unlock height for any locked STX.
+",
+    example: "",
+};
+
 const STX_TRANSFER: SpecialAPI = SpecialAPI {
     input_type: "uint, principal, principal, buff",
     output_type: "(response bool uint)",
@@ -1918,7 +1930,7 @@ fn make_api_reference(function: &NativeFunctions) -> FunctionAPI {
         GetTokenSupply => make_for_special(&GET_TOKEN_SUPPLY, name),
         AtBlock => make_for_special(&AT_BLOCK, name),
         GetStxBalance => make_for_simple_native(&STX_GET_BALANCE, &GetStxBalance, name),
-        StxGetAccount => make_for_simple_native(&STX_GET_BALANCE, &StxGetAccount, name),
+        StxGetAccount => make_for_simple_native(&STX_GET_ACCOUNT, &StxGetAccount, name),
         StxTransfer => make_for_special(&STX_TRANSFER, name),
         StxTransferMemo => make_for_special(&STX_TRANSFER_MEMO, name),
         StxBurn => make_for_simple_native(&STX_BURN, &StxBurn, name),

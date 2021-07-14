@@ -61,11 +61,19 @@ const BOOT_CODE_GENESIS: &'static str = std::include_str!("genesis.clar");
 pub const POX_1_NAME: &'static str = "pox";
 pub const POX_2_NAME: &'static str = "pox-2";
 
+const POX_2_TESTNET_CONSTS: &'static str = std::include_str!("pox-testnet.clar");
+const POX_2_MAINNET_CONSTS: &'static str = std::include_str!("pox-mainnet.clar");
+const POX_2_BODY: &'static str = std::include_str!("pox-2.clar");
+
 lazy_static! {
     pub static ref BOOT_CODE_POX_MAINNET: String =
         format!("{}\n{}", BOOT_CODE_POX_MAINNET_CONSTS, BOOT_CODE_POX_BODY);
     pub static ref BOOT_CODE_POX_TESTNET: String =
         format!("{}\n{}", BOOT_CODE_POX_TESTNET_CONSTS, BOOT_CODE_POX_BODY);
+    pub static ref POX_2_MAINNET_CODE: String =
+        format!("{}\n{}", BOOT_CODE_POX_MAINNET_CONSTS, POX_2_BODY);
+    pub static ref POX_2_TESTNET_CODE: String =
+        format!("{}\n{}", BOOT_CODE_POX_TESTNET_CONSTS, POX_2_BODY);
     pub static ref BOOT_CODE_COST_VOTING_TESTNET: String = make_testnet_cost_voting();
     pub static ref STACKS_BOOT_CODE_MAINNET: [(&'static str, &'static str); 6] = [
         ("pox", &BOOT_CODE_POX_MAINNET),
@@ -859,6 +867,30 @@ pub mod test {
                 make_pox_addr(addr_version, addr_bytes),
                 Value::UInt(burn_ht as u128),
                 Value::UInt(lock_period),
+            ],
+        )
+        .unwrap();
+
+        make_tx(key, nonce, 0, payload)
+    }
+
+    pub fn make_pox_2_extend(
+        key: &StacksPrivateKey,
+        nonce: u64,
+        addr_version: AddressHashMode,
+        addr_bytes: Hash160,
+        lock_period: u128,
+    ) -> StacksTransaction {
+        // (define-public (stack-stx (amount-ustx uint)
+        //                           (pox-addr (tuple (version (buff 1)) (hashbytes (buff 20))))
+        //                           (lock-period uint))
+        let payload = TransactionPayload::new_contract_call(
+            boot_code_test_addr(),
+            "pox-2",
+            "stack-extend",
+            vec![
+                Value::UInt(lock_period),
+                make_pox_addr(addr_version, addr_bytes),
             ],
         )
         .unwrap();

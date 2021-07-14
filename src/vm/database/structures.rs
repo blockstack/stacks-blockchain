@@ -407,6 +407,29 @@ impl<'db, 'conn> STXBalanceSnapshot<'db, 'conn> {
         };
     }
 
+    pub fn extend_lock_v2(&mut self, unlock_burn_height: u64) {
+        let unlocked = self.unlock_available_tokens_if_any();
+        if unlocked > 0 {
+            debug!("Consolidated after extend-token-lock");
+        }
+
+        if !self.has_locked_tokens() {
+            // caller needs to have checked this
+            panic!("FATAL: account does not have locked tokens");
+        }
+
+        if unlock_burn_height <= self.burn_block_height {
+            // caller needs to have checked this
+            panic!("FATAL: cannot set a lock with expired unlock burn height");
+        }
+
+        self.balance = STXBalance::LockedPoxTwo {
+            amount_unlocked: self.balance.amount_unlocked(),
+            amount_locked: self.balance.amount_locked(),
+            unlock_height: unlock_burn_height,
+        };
+    }
+
     pub fn lock_tokens_v2(&mut self, amount_to_lock: u128, unlock_burn_height: u64) {
         let unlocked = self.unlock_available_tokens_if_any();
         if unlocked > 0 {

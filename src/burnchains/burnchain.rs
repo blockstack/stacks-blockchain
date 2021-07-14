@@ -504,13 +504,22 @@ impl Burnchain {
         self.first_block_height + reward_cycle * (self.pox_constants.reward_cycle_length as u64) + 1
     }
 
-    pub fn block_height_to_reward_cycle(&self, block_height: u64) -> Option<u64> {
-        if block_height < self.first_block_height {
+    pub fn static_block_height_to_reward_cycle(
+        block_ht: u64,
+        first_block_ht: u64,
+        reward_cycle_len: u64,
+    ) -> Option<u64> {
+        if block_ht < first_block_ht {
             return None;
         }
-        Some(
-            (block_height - self.first_block_height)
-                / (self.pox_constants.reward_cycle_length as u64),
+        Some((block_ht - first_block_ht) / (reward_cycle_len))
+    }
+
+    pub fn block_height_to_reward_cycle(&self, block_height: u64) -> Option<u64> {
+        Self::static_block_height_to_reward_cycle(
+            block_height,
+            self.first_block_height,
+            self.pox_constants.reward_cycle_length as u64,
         )
     }
 

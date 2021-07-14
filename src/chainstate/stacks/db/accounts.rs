@@ -268,6 +268,37 @@ impl StacksChainState {
             .expect("FATAL: failed to set account nonce")
     }
 
+    /// Extend a STX lock up for PoX for a time.  Does NOT touch the account nonce.
+    /// Returns Ok(lock_amount) when successful
+    pub fn pox_lock_extend_v2(
+        db: &mut ClarityDatabase,
+        principal: &PrincipalData,
+        unlock_burn_height: u64,
+    ) -> Result<u128, Error> {
+        assert!(unlock_burn_height > 0);
+
+        let mut snapshot = db.get_stx_balance_snapshot(principal);
+
+        if !snapshot.has_locked_tokens() {
+            return Err(Error::PoxExtendNotLocked);
+        }
+
+        snapshot.extend_lock_v2(unlock_burn_height);
+
+        let amount_locked = snapshot.balance().amount_locked();
+
+        debug!(
+            "PoX v2 lock applied";
+            "pox_locked_ustx" => amount_locked,
+            "available_ustx" => snapshot.balance().amount_unlocked(),
+            "unlock_burn_height" => unlock_burn_height,
+            "account" => %principal,
+        );
+
+        snapshot.save();
+        Ok(amount_locked)
+    }
+
     /// Lock up STX for PoX for a time.  Does NOT touch the account nonce.
     pub fn pox_lock_v2(
         db: &mut ClarityDatabase,
